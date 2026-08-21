@@ -1,0 +1,256 @@
+import json
+import threading
+import time
+
+import anthropic
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from app import auth
+from app.main import create_app
+
+# The owner credential the test machine is configured with. Production reads it
+# from the environment; nothing is baked in.
+OWNER_TOKEN = "owner-credential-for-tests"
+OWNER = {"x-owner-token": OWNER_TOKEN}
+SESSION_COOKIE = auth.SESSION_COOKIE
+
+
+def _multipart_filename(body: bytes) -> str | None:
+    """Pull the filename out of a multipart upload without a parser."""
+    marker = b'filename="'
+    start = body.find(marker)
+    if start == -1:
+        return None
+    start += len(marker)
+    return body[start : body.find(b'"', start)].decode("utf-8", "replace")
+
+
+class MachineKilled(BaseException):
+    """The machine went away mid-call.
+
+    It stands in for a SIGKILL, and being a `BaseException` is what makes it
+    faithful: the Anthropic SDK turns any `Exception` from the transport into an
+    `APIConnectionError` and retries it, which is the opposite of a machine
+    dying. Nothing recovers from this one — the process that hits it is
+    finished, so whatever a job knows afterwards it committed beforehand.
+    """
+
+
+_KILLED = object()
+
+
+class ClaudeScript:
+    """A scripted Anthropic API, faked at the network transport only.
+
+    The real SDK stays in the loop — only the HTTP boundary is replaced — so SDK
+    misuse still fails tests and the application needs no test-only seam of its
+    own. Tests queue response bodies; requests are recorded for assertions.
+    """
+
+    def __init__(self):
+        self._queued: list[tuple[object, float]] = []
+        self.requests: list[dict] = []
+        # The admission gate and the Files API are separate endpoints; keeping
+        # their traffic apart is what lets a test say "nothing was generated".
+        self.count_requests: list[dict] = []
+        self.file_requests: list[httpx.Request] = []
+        self._token_counts: list[int] = []
+        self._uploads: list[str] = []
+        self._paused = threading.Event()
+
+    def replies(
+        self,
+        text: str,
+        *,
+        stop_reason: str = "end_turn",
+        usage: dict | None = None,
+        pause: float = 0.0,
+    ):
+        """Queue a normal assistant reply whose single text block is `text`.
+
+        `pause` holds the call open, the way a real topic call does for minutes
+        at a time — long enough for something else to happen to the machine
+        while it is waiting.
+        """
+        self._queue(
+            {
+                "id": f"msg_{len(self._queued)}",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [{"type": "text", "text": text}],
+                "stop_reason": stop_reason,
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    **(usage or {}),
+                },
+            },
+            pause,
+        )
+        return self
+
+    def replies_json(self, payload: dict, **kwargs):
+        return self.replies(json.dumps(payload), **kwargs)
+
+    def refuses(self, category: str = "bio"):
+        """Queue a safety refusal — HTTP 200, empty content, no text block."""
+        self._queue(
+            {
+                "id": f"msg_{len(self._queued)}",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [],
+                "stop_reason": "refusal",
+                "stop_details": {
+                    "type": "refusal",
+                    "category": category,
+                    "explanation": "declined",
+                },
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            }
+        )
+        return self
+
+    def dies(self):
+        """Queue a call the machine does not survive: the request goes out, and
+        nothing ever comes back."""
+        self._queue(_KILLED)
+        return self
+
+    def wait_for_paused_call(self, timeout: float) -> bool:
+        """Block until a paused call is in flight."""
+        return self._paused.wait(timeout)
+
+    def counts_tokens(self, input_tokens: int):
+        """Queue the answer to the next admission-gate token count."""
+        self._token_counts.append(input_tokens)
+        return self
+
+    @property
+    def uploads(self) -> list[str]:
+        """Filenames sent to the Files API, in order."""
+        return list(self._uploads)
+
+    def _queue(self, body: object, pause: float = 0.0):
+        self._queued.append((body, pause))
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+
+        # The Files API is multipart, not JSON, so it is answered before the
+        # JSON-decoding the Messages endpoints rely on.
+        if path.endswith("/v1/files"):
+            self.file_requests.append(request)
+            name = _multipart_filename(request.content) or f"upload-{len(self._uploads)}"
+            self._uploads.append(name)
+            file_id = f"file_{len(self._uploads) - 1:04d}"
+            return httpx.Response(
+                200,
+                json={
+                    "id": file_id,
+                    "type": "file",
+                    "filename": name,
+                    "mime_type": "application/pdf",
+                    "size_bytes": len(request.content),
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "downloadable": False,
+                },
+            )
+
+        if path.endswith("/count_tokens"):
+            self.count_requests.append(json.loads(request.content))
+            counted = self._token_counts.pop(0) if self._token_counts else 1000
+            return httpx.Response(200, json={"input_tokens": counted})
+
+        self.requests.append(json.loads(request.content))
+        if not self._queued:
+            raise AssertionError(
+                f"Claude was called {len(self.requests)} time(s) but only "
+                f"{len(self.requests) - 1} response(s) were scripted"
+            )
+        body, pause = self._queued.pop(0)
+        if pause:
+            self._paused.set()
+            time.sleep(pause)
+        if body is _KILLED:
+            raise MachineKilled("the machine was killed during this call")
+        return httpx.Response(200, json=body)
+
+    def client(self) -> anthropic.Anthropic:
+        return anthropic.Anthropic(
+            api_key="test-key-not-real",
+            http_client=httpx.Client(transport=httpx.MockTransport(self._handle)),
+        )
+
+
+@pytest.fixture
+def claude():
+    return ClaudeScript()
+
+
+@pytest.fixture
+def boot(tmp_path, claude):
+    """Start an application over the volume.
+
+    The database and data directory are the same on every call, so a second call
+    is a restart of the machine: the new process boots against exactly what the
+    old one left behind. Used as `with boot() as machine:` — leaving the block
+    is the shutdown.
+    """
+
+    # One person, invited once, whose session is re-established on every restart
+    # — the same invite outliving the machine, which is the point of storing it.
+    invited = {"token": None}
+
+    class Machine(TestClient):
+        """A started machine, signed in as the test's invited person.
+
+        The API is default-deny, so a client that has not signed in can only
+        observe 401s. Tests about the door itself clear the cookie to get back
+        outside it; every other test wants to already be through.
+        """
+
+        def __enter__(self):
+            super().__enter__()
+            if invited["token"] is None:
+                minted = self.post("/api/invites", json={"person": "tester"}, headers=OWNER)
+                assert minted.status_code == 201, minted.text
+                invited["token"] = minted.json()["token"]
+            self.post("/api/session", json={"token": invited["token"]})
+            return self
+
+    def _boot(**settings) -> TestClient:
+        settings.setdefault("owner_token", OWNER_TOKEN)
+        return Machine(
+            create_app(
+                db_path=tmp_path / "ai-anki.db",
+                data_dir=tmp_path / "data",
+                anthropic_client=claude.client(),
+                **settings,
+            ),
+            # Over https, because the session cookie is Secure and a client on
+            # plain http would silently decline to store it — which is the
+            # cookie working, not the test being awkward.
+            base_url="https://testserver",
+        )
+
+    return _boot
+
+
+@pytest.fixture
+def client(boot):
+    """A test client over a throwaway database and a scripted Claude.
+
+    Tests drive the application through its HTTP boundary. Nothing below this
+    seam is reached into directly.
+    """
+    with boot() as c:
+        yield c

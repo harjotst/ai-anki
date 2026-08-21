@@ -1,0 +1,47 @@
+[project]
+name = "ai-anki"
+version = "0.1.0"
+description = "Turn study documents into Anki decks whose structure scales with the material"
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.20",
+    "anthropic>=0.40",
+    # Pinned exactly: genanki is semi-dormant (last release 2023-11-12) and we
+    # work around a known defect in this version rather than waiting on a fix.
+    # See docs/verification.md.
+    "genanki==0.13.1",
+    # Spreadsheets are read as tables rather than rendered to pages.
+    "openpyxl>=3.1",
+    # Image Occlusion rasterizes diagram pages locally. It has to be local:
+    # pages rasterized by the API come back at dimensions we cannot know, and a
+    # mask drawn against unknown dimensions lands in the wrong place.
+    "pypdfium2>=4.30",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+    # DEV ONLY. The official Anki package is AGPL-3.0-or-later; importing it
+    # from application code would impose network copyleft on a public service.
+    # It exists purely so tests can ask a real Anki what our .apkg actually did.
+    # Pinned exactly: the contract tests characterise ONE version's import
+    # behaviour, so the pin must move deliberately, never by resolution drift.
+    "anki==26.8.1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

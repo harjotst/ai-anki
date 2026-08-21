@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Pinned to match the image. The dev-only `anki` wheels are
+          # manylinux_2_35 and cp310-abi3, so the runner's glibc matters too.
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Tests
+        run: python -m pytest -q
+
+  fly-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # Strict, not plain. Plain validation silently accepts unrecognised keys,
+      # so a typo'd `auto_stop_machines` would pass here, do nothing in
+      # production, and let the machine stop itself under a running job.
+      - name: Validate fly.toml
+        run: fly config validate --strict
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t ai-anki:ci .
+
+      # LibreOffice only exists in the image, so the conversion tests skip
+      # locally and must run here. The concurrent-batch test is the one that
+      # matters: with a shared user profile it produces a couple of PDFs and
+      # several silent exit-1s, and nothing else in the suite would notice.
+      - name: Container-only tests
+        run: |
+          docker run --rm -v "$PWD/tests:/app/tests:ro" ai-anki:ci \
+            sh -c "pip install -q pytest pytest-asyncio anki==26.8.1 && \
+                   cd /app && python -m pytest tests/test_conversion.py tests/test_occlusion.py -q -p no:cacheprovider"

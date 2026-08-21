@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node / frontend build
+node_modules/
+frontend/dist/
+.vite/
+
+# Secrets — never commit the Anthropic key or the shared access password
+.env
+.env.*
+!.env.example
+
+# Runtime data: SQLite DB, uploaded documents, generated .apkg files.
+# `.local/` is the local dev volume — it holds real uploaded material, which is
+# other people's copyrighted course notes and must never reach a repository.
+.local/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.apkg
+
+# OS
+.DS_Store

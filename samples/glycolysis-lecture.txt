@@ -1,0 +1,51 @@
+BIOCHEMISTRY 201 — LECTURE 7: GLYCOLYSIS AND ITS REGULATION
+
+1. OVERVIEW
+Glycolysis is the cytosolic pathway converting one molecule of glucose into two
+molecules of pyruvate. It is anaerobic, universal across domains of life, and
+yields a net 2 ATP and 2 NADH per glucose. The pathway divides into an
+investment phase (steps 1-5, consuming 2 ATP) and a payoff phase (steps 6-10,
+producing 4 ATP).
+
+2. THE INVESTMENT PHASE
+Step 1: Hexokinase phosphorylates glucose to glucose-6-phosphate, consuming ATP.
+  In hepatocytes this role is served by glucokinase, which has a much higher Km
+  (~10 mM vs ~0.1 mM) and is not inhibited by its product.
+Step 2: Phosphoglucose isomerase converts G6P to fructose-6-phosphate.
+Step 3: Phosphofructokinase-1 (PFK-1) phosphorylates F6P to fructose-1,6-
+  bisphosphate. This is the committed, rate-limiting step of the pathway.
+Step 4: Aldolase cleaves F1,6BP into DHAP and glyceraldehyde-3-phosphate.
+Step 5: Triose phosphate isomerase interconverts DHAP and G3P.
+
+3. THE PAYOFF PHASE
+Step 6: Glyceraldehyde-3-phosphate dehydrogenase oxidises G3P and reduces NAD+
+  to NADH, producing 1,3-bisphosphoglycerate.
+Step 7: Phosphoglycerate kinase transfers a phosphate to ADP — the first
+  substrate-level phosphorylation.
+Step 8: Phosphoglycerate mutase moves the phosphate from C3 to C2.
+Step 9: Enolase dehydrates 2-phosphoglycerate to phosphoenolpyruvate.
+Step 10: Pyruvate kinase transfers PEP's phosphate to ADP, yielding pyruvate.
+
+4. REGULATION
+PFK-1 is allosterically inhibited by ATP and citrate, signalling that the cell
+is energy-replete. It is activated by AMP and, most potently, by fructose-2,6-
+bisphosphate. That activator is produced by PFK-2, a bifunctional enzyme whose
+kinase domain is active when dephosphorylated. Glucagon raises cAMP, activating
+PKA, which phosphorylates PFK-2 and switches it to its phosphatase mode — so
+glucagon suppresses hepatic glycolysis. Insulin does the reverse.
+
+Hexokinase is inhibited by glucose-6-phosphate; glucokinase is not, which lets
+the liver keep taking up glucose after a meal when other tissues are saturated.
+
+Pyruvate kinase is activated by fructose-1,6-bisphosphate (feed-forward
+activation) and inhibited by ATP and alanine.
+
+5. CLINICAL RELEVANCE
+Pyruvate kinase deficiency is the commonest enzymopathy of glycolysis and causes
+a chronic haemolytic anaemia: erythrocytes have no mitochondria and depend
+entirely on glycolysis for ATP. Affected cells show elevated 2,3-BPG, which
+shifts the oxygen dissociation curve rightward and partly compensates.
+
+Under anaerobic conditions, lactate dehydrogenase regenerates NAD+ from NADH by
+reducing pyruvate to lactate — without which glycolysis would halt at step 6 for
+want of oxidised cofactor.
