@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Uploa
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from app import auth, backup, budget, db, generation, identity, ingestion
-from app import jobs, ledger, packaging, planning, progress, providers, study
+from app import jobs, ledger, packaging, planning, progress, providers, social, study
 from app import worker as worker_module
 
 
@@ -647,6 +647,85 @@ def create_app(
         if not study.studiable(conn, account.id, card_uuid):
             raise HTTPException(status_code=404, detail="no such card")
         return {"card_uuid": card_uuid, "reviews": study.history(conn, account.id, card_uuid)}
+
+    # --- friends, and competing with them --------------------------------
+
+    @app.get("/api/me")
+    async def read_me(
+        conn=Depends(get_conn), account: identity.Account = Depends(account_of)
+    ):
+        with db.transaction(conn):
+            code = social.friend_code(conn, account.id)
+        return {
+            "account_id": account.id,
+            "display_name": account.display_name,
+            "email": account.email,
+            "is_admin": account.is_admin,
+            "friend_code": code,
+        }
+
+    @app.get("/api/friends")
+    async def read_friends(
+        conn=Depends(get_conn), account: identity.Account = Depends(account_of)
+    ):
+        return social.listing(conn, account.id)
+
+    @app.post("/api/friends")
+    async def add_friend(
+        body: dict,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        """Ask by the code somebody gave you."""
+        try:
+            with db.transaction(conn):
+                other = social.request(conn, account.id, str(body.get("code", "")))
+        except social.NotFriendable as exc:
+            # "No such code" is a 404; "that code is yours" is a 422. The
+            # difference is real: one is a typo, the other is a misunderstanding.
+            status = 404 if "no such code" in str(exc) else 422
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+        return {"account_id": other, "state": social.PENDING}
+
+    @app.post("/api/friends/{other}/accept")
+    async def accept_friend(
+        other: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        with db.transaction(conn):
+            done = social.accept(conn, account.id, other)
+        if not done:
+            raise HTTPException(status_code=404, detail="no request from that person")
+        return {"account_id": other, "state": social.ACCEPTED}
+
+    @app.delete("/api/friends/{other}")
+    async def remove_friend(
+        other: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        with db.transaction(conn):
+            social.remove(conn, account.id, other)
+        return {"account_id": other, "state": "none"}
+
+    @app.get("/api/leaderboard")
+    async def read_leaderboard(
+        days: int = social.DEFAULT_WINDOW_DAYS,
+        at: str | None = None,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        return social.leaderboard(conn, account.id, days=max(1, days), at=_at(at))
+
+    @app.get("/api/decks/{deck_id}/compare")
+    async def compare_deck(
+        deck_id: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        owned_deck(conn, deck_id, account.id)
+        return social.compare(conn, account.id, deck_id)
 
     @app.get("/api/me/activity")
     async def read_activity(

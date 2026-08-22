@@ -151,3 +151,11 @@ button.primary { padding: .6rem 1.2rem; margin-right: .75rem; margin-bottom: .75
                   background: #f3f1ec; color: var(--ink); }
 .ratings button:hover:not(:disabled) { background: var(--accent); color: #fff; }
 .ratings .hint { font-size: .68rem; opacity: .65; }
+
+/* --- friends ----------------------------------------------------------- */
+.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: .12em; font-size: 1.15rem; }
+.board td { font-variant-numeric: tabular-nums; }
+.board tr.you td { font-weight: 600; }
+.board td:not(:first-child), .board th:not(:first-child) { text-align: right; }
+.signout { display: flex; gap: .5rem; justify-content: flex-end; }

@@ -138,7 +138,7 @@ const STATE_LABEL = {
   failed: "Failed",
 };
 
-function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut, onStudy }) {
+function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut, onStudy, onFriends }) {
   const unfinished = jobs.filter((job) => !["complete", "reviewing"].includes(job.state));
 
   return (
@@ -193,6 +193,9 @@ function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut, onStudy })
       )}
 
       <div className="panel narrow signout">
+        <button className="ghost" onClick={onFriends}>
+          Studying together
+        </button>
         <button className="ghost" onClick={onSignOut}>
           Sign out
         </button>
@@ -384,6 +387,159 @@ function PlanEditor({ jobId, plan, onApproved }) {
         </button>
       </div>
       {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+// --- friends, and competing with them ------------------------------------
+
+function Friends({ onBack }) {
+  const [me, setMe] = useState(null);
+  const [circle, setCircle] = useState(null);
+  const [board, setBoard] = useState(null);
+  const [code, setCode] = useState("");
+  const [error, setError] = useState(null);
+
+  const refresh = useCallback(async () => {
+    const [who, friends, leaderboard] = await Promise.all([
+      api("/api/me"),
+      api("/api/friends"),
+      api("/api/leaderboard"),
+    ]);
+    setMe(who);
+    setCircle(friends);
+    setBoard(leaderboard);
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  if (!me || !circle || !board) return <div className="panel narrow muted">Loading…</div>;
+
+  const add = async (event) => {
+    event.preventDefault();
+    setError(null);
+    try {
+      await api("/api/friends", {
+        method: "POST",
+        body: JSON.stringify({ code: code.trim().toUpperCase() }),
+      });
+      setCode("");
+      refresh();
+    } catch (problem) {
+      setError(problem.message);
+    }
+  };
+
+  const act = async (path, options) => {
+    await api(path, options);
+    refresh();
+  };
+
+  const name = (row) =>
+    row.is_you ? "You" : row.display_name || row.account_id.slice(0, 8);
+
+  return (
+    <div className="panel narrow">
+      <h2>Studying together</h2>
+
+      <div className="estimate">
+        Your code is <strong className="code">{me.friend_code}</strong>
+        <p className="muted small">
+          Give it to somebody to be added. It is not your email, so it says
+          nothing about you until you hand it over.
+        </p>
+      </div>
+
+      <form className="field" onSubmit={add}>
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder="a friend's code"
+          maxLength={12}
+        />
+        <button type="submit" disabled={!code.trim()}>
+          Add
+        </button>
+      </form>
+      {error && <p className="error">{error}</p>}
+
+      {circle.incoming.length > 0 && (
+        <>
+          <h3>Wants to study with you</h3>
+          <ul className="rows">
+            {circle.incoming.map((person) => (
+              <li key={person.account_id}>
+                <div className="row static">
+                  <span className="row-main">
+                    {person.display_name || person.account_id.slice(0, 8)}
+                  </span>
+                  <button
+                    onClick={() => act(`/api/friends/${person.account_id}/accept`, {
+                      method: "POST",
+                    })}
+                  >
+                    Accept
+                  </button>
+                  <button
+                    className="ghost"
+                    onClick={() => act(`/api/friends/${person.account_id}`, {
+                      method: "DELETE",
+                    })}
+                  >
+                    Ignore
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <h3>This week</h3>
+      <table className="board">
+        <thead>
+          <tr>
+            <th>Who</th>
+            <th>Reviews</th>
+            <th>Streak</th>
+            <th>Known</th>
+          </tr>
+        </thead>
+        <tbody>
+          {board.rows.map((row) => (
+            <tr key={row.account_id} className={row.is_you ? "you" : ""}>
+              <td>{name(row)}</td>
+              <td>{row.reviews}</td>
+              <td>{row.streak_days === 0 ? "—" : `${row.streak_days}d`}</td>
+              <td>{row.cards_known}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted small">
+        {/* Said plainly rather than left for somebody to work out from a number
+            that does not move the way they expect. */}
+        <strong>Reviews</strong> is how much work was done. <strong>Known</strong> is
+        how many cards you would recall right now — it goes down if you stop, which
+        a review count never does.
+      </p>
+      <p className="muted small">
+        Topic-by-topic comparison needs a deck you both hold. Decks belong to
+        whoever uploaded the material, so that is not possible yet.
+      </p>
+
+      {circle.outgoing.length > 0 && (
+        <p className="muted small">
+          Waiting on {circle.outgoing.length} person
+          {circle.outgoing.length === 1 ? "" : "s"} to accept.
+        </p>
+      )}
+
+      <button className="ghost" onClick={onBack}>
+        Back
+      </button>
     </div>
   );
 }
@@ -1032,6 +1188,7 @@ export default function App() {
   // The deck being studied, if any. Studying is not a job, so it lives beside
   // the job state rather than inside it.
   const [studying, setStudying] = useState(null);
+  const [friends, setFriends] = useState(false);
   // What this person already has. Loaded once past the door and refreshed
   // whenever they come back to it: the home screen is the only handle on a run
   // once its tab is gone.
@@ -1124,6 +1281,8 @@ export default function App() {
   if (session === undefined) return <div className="panel narrow muted">Loading…</div>;
   if (!session) return <SignIn />;
 
+  if (friends) return <Friends onBack={() => setFriends(false)} />;
+
   if (studying)
     return (
       <Study
@@ -1150,6 +1309,7 @@ export default function App() {
           await api(`/api/decks/${deck.deck_id}/study`, { method: "POST" });
           setStudying(deck);
         }}
+        onFriends={() => setFriends(true)}
         onSignOut={async () => {
           await signOut();
           setHome(null);
