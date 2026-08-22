@@ -253,10 +253,33 @@ def backup_to(db_path: Path, destination: Path) -> int:
     return destination.stat().st_size
 
 
+# Columns added after a database was already in service. `CREATE TABLE IF NOT
+# EXISTS` does nothing to a table that exists, so a new column has to be added
+# explicitly or a live volume keeps the old shape for ever. Each is applied
+# once and ignored if it is already there; additive only, because a column drop
+# or a type change cannot be rolled forward safely on one machine with no
+# maintenance window.
+MIGRATIONS = [
+    # When somebody actually read this card. Null until they did, which is what
+    # lets a review of 164 cards be stopped half way through and resumed.
+    "ALTER TABLE card ADD COLUMN reviewed_at REAL",
+]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for statement in MIGRATIONS:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc):
+                raise
+
+
 def initialise(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
     finally:
         conn.close()

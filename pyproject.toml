@@ -20,6 +20,10 @@ dependencies = [
     # mask drawn against unknown dimensions lands in the wrong place.
     "pypdfium2>=4.30",
     "pillow>=10.0",
+    # Off-platform database backups to S3-compatible storage (Tigris on Fly).
+    # boto3 rather than hand-rolled SigV4: signing is the part that is easy to
+    # get subtly wrong and impossible to notice until a restore is needed.
+    "boto3>=1.35",
 ]
 
 [project.optional-dependencies]

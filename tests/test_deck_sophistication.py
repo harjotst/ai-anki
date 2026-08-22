@@ -157,3 +157,25 @@ def test_only_leaf_decks_are_emitted_and_anki_fills_in_the_parents():
         col.import_package(package)
         assert "AI Anki::Biology::Metabolism::Glycolysis" in col.decks
         assert "AI Anki::Biology" in col.decks
+
+
+def test_a_hard_card_is_still_one_question_with_one_answer(client, claude):
+    """Measured on a real run: 9% of answers packed three or more facts.
+
+    "Hard" was being read as "put more in it". A card whose answer is a list is
+    a card that is never quite right and never quite wrong, so it is graded
+    'again' for weeks and the schedule for everything around it degrades with
+    it. Difficulty has to mean a harder question, not a longer answer.
+    """
+    claude.replies_json(PLAN)
+    job_id = upload(client)
+    client.post(f"/api/jobs/{job_id}/plan")
+    claude.replies_json(CARDS)
+    client.post(f"/api/jobs/{job_id}/generate")
+
+    instruction = claude.requests[-1]["messages"][0]["content"][-1]["text"].lower()
+
+    # The constraint is stated for every difficulty, because it is the one rule
+    # that a harder question makes it easier to break.
+    assert "one fact" in instruction or "single fact" in instruction
+    assert "split" in instruction

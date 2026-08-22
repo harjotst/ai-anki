@@ -34,6 +34,12 @@ from app import db, generation, jobs
 # write the checkpoint before SIGKILL. The margin is generous because
 # `kill_timeout` is documented as best-effort; a drain cut shorter than this
 # loses nothing that boot recovery does not pick up.
+# How many topic calls run at once. Bounded rather than unlimited: the fan-out
+# shares one prompt-cache key, and the vendors that publish a figure warn that
+# too many requests a minute against one key start missing. It is also the
+# number of concurrent SQLite writers this single machine has to survive.
+MAX_CONCURRENT_TOPICS = 5
+
 DRAIN_DEADLINE_SECONDS = 270.0
 
 
@@ -109,39 +115,69 @@ class Worker:
         await asyncio.gather(*(running[job_id] for job_id in stranded), return_exceptions=True)
 
     async def _generate(self, job_id: str) -> str:
+        """Write the cards for every topic that has not finished yet.
+
+        The first topic runs ALONE, then the rest fan out concurrently. That
+        ordering is not a detail: a cache entry only becomes readable once the
+        first response has begun, so a flat fan-out has every call miss and each
+        one pays a cache-creation charge — which costs more than not caching at
+        all. One call ahead of the pack turns N-1 misses into N-1 reads.
+        """
         conn = db.connect(self._db_path)
         try:
             documents = jobs.documents_for(conn, job_id, self._provider)
-            # Only topics that are not already done are run, which is what makes
-            # a resume cost the remainder of the job rather than all of it.
-            for topic in jobs.unfinished_topics(conn, job_id):
-                if self._draining:
-                    jobs.interrupt_job(conn, job_id, "interrupted by a shutdown")
+            pending = jobs.unfinished_topics(conn, job_id)
+            if not pending:
+                return jobs.settle_job(conn, job_id)
+
+            # The pacesetter writes the shared prefix.
+            first, rest = pending[0], pending[1:]
+            if await self._one_topic(conn, job_id, first, documents) is None:
+                return jobs.INTERRUPTED
+
+            if rest:
+                limit = asyncio.Semaphore(MAX_CONCURRENT_TOPICS)
+
+                async def bounded(topic):
+                    async with limit:
+                        return await self._one_topic(conn, job_id, topic, documents)
+
+                results = await asyncio.gather(*(bounded(t) for t in rest))
+                if any(outcome is None for outcome in results):
                     return jobs.INTERRUPTED
-                jobs.start_topic(conn, job_id, topic.topic_id)
-                try:
-                    # The SDK is synchronous and a topic call takes minutes. On
-                    # the event loop it would block every other request, and the
-                    # shutdown handler along with them.
-                    result = await asyncio.to_thread(
-                        self._provider.send,
-                        generation.build_cards_request(
-                            documents,
-                            topic.topic,
-                            self._provider,
-                            jobs.existing_cards_for_topic(conn, job_id, topic.topic_id),
-                            jobs.sibling_topics(conn, job_id, topic.topic_id),
-                        ),
-                    )
-                except providers.Unusable as exc:
-                    jobs.fail_topic(conn, job_id, topic.topic_id, str(exc))
-                    continue
-                jobs.record_usage(
-                    conn, job_id, "cards", result.usage,
-                    topic_id=topic.topic_id, model=self._provider.model,
-                )
-                jobs.save_topic_cards(conn, job_id, topic.topic, result.data["cards"])
 
             return jobs.settle_job(conn, job_id)
         finally:
             conn.close()
+
+    async def _one_topic(self, conn, job_id: str, topic, documents) -> bool | None:
+        """Write one topic's cards. None means a shutdown cut it short."""
+        if self._draining:
+            jobs.interrupt_job(conn, job_id, "interrupted by a shutdown")
+            return None
+
+        jobs.start_topic(conn, job_id, topic.topic_id)
+        request = generation.build_cards_request(
+            documents,
+            topic.topic,
+            self._provider,
+            jobs.existing_cards_for_topic(conn, job_id, topic.topic_id),
+            jobs.sibling_topics(conn, job_id, topic.topic_id),
+        )
+        try:
+            # The SDK is synchronous and a topic call takes many seconds. On the
+            # event loop it would block every other request, and the shutdown
+            # handler along with them.
+            result = await asyncio.to_thread(self._provider.send, request)
+        except providers.Unusable as exc:
+            # One topic refusing is not the job failing. The rest still run, and
+            # this one can be retried on its own.
+            jobs.fail_topic(conn, job_id, topic.topic_id, str(exc))
+            return False
+
+        jobs.record_usage(
+            conn, job_id, "cards", result.usage,
+            topic_id=topic.topic_id, model=self._provider.model,
+        )
+        jobs.save_topic_cards(conn, job_id, topic.topic, result.data["cards"])
+        return True

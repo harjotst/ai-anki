@@ -70,16 +70,66 @@ curl -X POST -H "x-owner-token: $AI_ANKI_OWNER_TOKEN" \
 ## Backups
 
 Platform volume snapshots are documented as **not** being a backup. The database
-is the one thing whose loss cannot be recovered by re-running anything, so it is
-copied off the platform on a schedule.
+is the one thing whose loss cannot be recovered by re-running anything — every
+card identity lives in it, and without them a re-import hands the user a second
+copy of their whole deck instead of updating it — so it is copied off the
+platform every night.
+
+`VACUUM INTO` takes its own read transaction, so the copy is a coherent
+point-in-time image. A plain file copy of a WAL-mode database is not.
+
+### Setting it up
+
+```bash
+fly storage create --name ai-anki-backups
+```
+
+That sets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_ENDPOINT_URL_S3`
+as secrets on the app. One more is needed, because the presence of a bucket name
+is what turns backups on:
+
+```bash
+fly secrets set AI_ANKI_BACKUP_BUCKET=ai-anki-backups
+```
+
+With no bucket set, backups are **off rather than broken**. That is deliberate:
+local development and a first deploy both run without one, and a nightly task
+that raises every night is a task whose alarms get muted.
+
+### What runs
+
+A task inside the application wakes at 03:00 UTC, takes a `VACUUM INTO`
+snapshot, gzips it, uploads it under a date-sorted key, and deletes anything
+older than 14 days. Every failure is logged and slept off rather than raised: a
+backup task that takes the process down converts "last night's copy is missing"
+into "the service is down".
+
+Pruning is driven by what the bucket listing reports, never by parsing key
+names. A key that failed to parse would otherwise be kept for ever or, far
+worse, treated as ancient and deleted.
+
+Trigger one by hand at any time:
 
 ```bash
 curl -X POST -H "x-owner-token: $AI_ANKI_OWNER_TOKEN" \
   https://<app>/api/maintenance/backup
 ```
 
-`VACUUM INTO` takes its own read transaction, so the copy is a coherent
-point-in-time image. A plain file copy of a WAL-mode database is not.
+### Restoring
+
+```bash
+aws s3 ls s3://ai-anki-backups/db/ --endpoint-url https://fly.storage.tigris.dev
+aws s3 cp s3://ai-anki-backups/db/<key> ./restore.db.gz \
+  --endpoint-url https://fly.storage.tigris.dev
+gunzip restore.db.gz
+```
+
+Then stop the machine, put `restore.db` at `/data/ai-anki.db` on the volume, and
+start it again. Boot recovery re-claims any job the old process was mid-way
+through; nothing else needs doing.
+
+Test a restore before you need one. A backup nobody has restored is a backup
+whose format nobody has checked.
 
 ## Owner credential
 
@@ -88,3 +138,57 @@ which **closes** minting rather than opening it.
 
 Minting invites, revoking them, viewing spend, purging and backups are all owner
 surfaces, reached with `x-owner-token` rather than a session.
+
+## Deploying
+
+One machine, one volume, one region. Two machines would be two different
+SQLite databases, silently — which is why `min_machines_running` is 1 and
+`auto_stop_machines` is off. A job runs for minutes after its request has
+returned, so auto-stopping on idle HTTP would kill runs part-way through.
+
+### First deploy
+
+```bash
+fly launch --no-deploy --copy-config --name ai-anki --region lhr
+```
+
+```bash
+fly volumes create ai_anki_data --region lhr --size 3
+```
+
+```bash
+fly secrets set ANTHROPIC_API_KEY=sk-ant-... AI_ANKI_OWNER_TOKEN=$(openssl rand -hex 32)
+```
+
+```bash
+fly deploy
+```
+
+Then mint yourself an invite — the application is default-deny, and an unset
+owner token closes minting rather than opening it:
+
+```bash
+curl -X POST -H "x-owner-token: $AI_ANKI_OWNER_TOKEN" \
+  -H 'content-type: application/json' -d '{"person":"you"}' \
+  https://ai-anki.fly.dev/api/invites
+```
+
+### Every deploy after that
+
+`fly deploy` SIGTERMs the running machine. That is a normal event here rather
+than an exceptional one: the drain stops taking new work, gives calls already
+in flight a bounded window to land, and checkpoints where it got to. A job
+caught by a deploy comes back as `interrupted` and resumes on the next run
+rather than restarting from nothing.
+
+Schema changes ride along with the deploy. `db.MIGRATIONS` is applied at boot,
+additively — `CREATE TABLE IF NOT EXISTS` does nothing to a table that already
+exists, so a new column has to be added explicitly or a live volume keeps the
+old shape for ever.
+
+### Sizing
+
+The volume holds the database, the uploads and `TMPDIR`. Uploads dominate and
+are purged on a schedule; 3GB is comfortable for a term's material for a handful
+of people. One LibreOffice conversion peaks around 218MB, measured, which is why
+the machine is 1GB rather than 256MB.

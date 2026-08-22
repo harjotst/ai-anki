@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel
 
 from app import auth
-from app import budget, db, generation, ingestion, jobs, ledger, packaging, planning, progress, providers
+from app import backup, budget, db, generation, ingestion, jobs, ledger, packaging, planning, progress, providers
 from app import worker as worker_module
 
 
@@ -48,9 +48,13 @@ def create_app(
     global_daily_budget_usd: float = budget.GLOBAL_DAILY_BUDGET_USD,
     login_delay_seconds: float = auth.FAILED_LOGIN_DELAY_SECONDS,
     lockout_seconds: float = auth.LOCKOUT_SECONDS,
+    # None means no off-platform copies. Tests pass one explicitly rather
+    # than reaching for the environment.
+    backup_destination: backup.Destination | None = None,
 ) -> FastAPI:
     db_path = Path(db_path)
     data_dir = Path(data_dir)
+    backup_destination = backup_destination or backup.destination_from_env()
     # A runtime secret, never baked in. Unset means nobody is the owner, which
     # shuts minting rather than opening it.
     owner_token = owner_token or os.environ.get("AI_ANKI_OWNER_TOKEN")
@@ -76,7 +80,20 @@ def create_app(
             jobs.recover_orphans(conn, worker.id)
         finally:
             conn.close()
+
+        # Nightly off-platform copies, if a bucket is configured. Absent
+        # configuration is a supported state: local development and a first
+        # deploy both run without one, and a task that raises every night is a
+        # task whose alarms get muted.
+        backups = None
+        if backup_destination is not None:
+            backups = asyncio.create_task(
+                backup.nightly(db_path, data_dir / "tmp", backup_destination)
+            )
+
         yield
+        if backups is not None:
+            backups.cancel()
         # The platform turns SIGTERM into a graceful shutdown, which arrives
         # here. Everything the drain does is bounded, because the kill that
         # follows is not negotiable.
@@ -210,6 +227,44 @@ def create_app(
         )
         return JSONResponse({"job_id": job_id}, status_code=201)
 
+    def plan_request_for(conn, job_id: str, job=None):
+        """The pass-1 request for a job, including what its deck already holds.
+
+        Shared by the three places that build it — the call itself, the size
+        guard, and the estimate — because a guard that measures a different
+        request from the one sent is not a guard.
+        """
+        job = job or jobs.load_job(conn, job_id)
+        existing = ledger.deck_topics(conn, job.deck_id) if job and job.deck_id else []
+        return planning.build_plan_request(
+            jobs.documents_for(conn, job_id, provider), provider, existing
+        )
+
+    @app.get("/api/jobs")
+    async def list_jobs(conn=Depends(get_conn), invite_id: str = Depends(invite_of)):
+        """Everything this person has started. The way back to a run."""
+        return {"jobs": jobs.list_jobs(conn, invite_id)}
+
+    @app.get("/api/decks")
+    async def list_decks(conn=Depends(get_conn), invite_id: str = Depends(invite_of)):
+        return {"decks": ledger.list_decks(conn, invite_id)}
+
+    @app.patch("/api/decks/{deck_id}")
+    async def rename_deck(
+        deck_id: str,
+        body: dict,
+        conn=Depends(get_conn),
+        invite_id: str = Depends(invite_of),
+    ):
+        if not ledger.deck_exists(conn, deck_id, invite_id):
+            raise HTTPException(status_code=404, detail="no such deck")
+        try:
+            with db.transaction(conn):
+                ledger.rename_deck(conn, deck_id, invite_id, str(body.get("name", "")))
+        except ledger.DeckNameRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"deck_id": deck_id}
+
     @app.get("/api/jobs/{job_id}")
     async def read_job(
         job_id: str, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
@@ -277,8 +332,7 @@ def create_app(
         _claim(conn, job_id, jobs.PLANNING)
 
         try:
-            documents = jobs.documents_for(conn, job_id, provider)
-            request = planning.build_plan_request(documents, provider)
+            request = plan_request_for(conn, job_id, job)
             # Measured before anything is generated, over the request that is
             # about to be sent rather than an approximation of it. A job that is
             # too large must cost nothing beyond this count.
@@ -324,16 +378,28 @@ def create_app(
         return {"sources_removed": removed}
 
     @app.post("/api/maintenance/backup")
-    async def backup(conn=Depends(get_conn)):
+    async def take_backup(conn=Depends(get_conn)):
         """Take a consistent copy while the application keeps running.
 
-        Platform volume snapshots are documented as not being a backup, and this
-        database is the one thing whose loss cannot be recovered by re-running
-        anything.
+        Off the platform when a bucket is configured, because a copy on the
+        same volume protects against nothing that actually happens. Onto the
+        volume otherwise, so the endpoint still does something useful before
+        object storage is set up.
         """
-        destination = data_dir / "backup.db"
-        written = db.backup_to(db_path, destination)
-        return {"path": str(destination), "bytes": written}
+        if backup_destination is not None:
+            result = await asyncio.to_thread(
+                backup.run, db_path, data_dir / "tmp", backup_destination
+            )
+            return {"destination": backup_destination.bucket, **result}
+        written = db.backup_to(db_path, data_dir / "backup.db")
+        return {
+            "path": str(data_dir / "backup.db"),
+            "bytes": written,
+            "warning": (
+                "on the same volume as the database it copies; set "
+                "AI_ANKI_BACKUP_BUCKET for an off-platform copy"
+            ),
+        }
 
     @app.get("/api/jobs/{job_id}/usage")
     async def read_usage(
@@ -360,9 +426,8 @@ def create_app(
         cannot keep.
         """
         job = owned_job(conn, job_id, invite_id)
-        documents = jobs.documents_for(conn, job_id, provider)
         input_tokens = ingestion.count_input_tokens(
-            provider, planning.build_plan_request(documents, provider)
+            provider, plan_request_for(conn, job_id, job)
         )
         jobs.record_input_tokens(conn, job_id, input_tokens)
 
@@ -488,7 +553,7 @@ def create_app(
         guard_size(
             conn,
             job_id,
-            planning.build_plan_request(jobs.documents_for(conn, job_id, provider), provider),
+            plan_request_for(conn, job_id, job),
         )
         if worker.draining:
             # Claiming an attempt we cannot run would spend one of the three
@@ -544,6 +609,7 @@ def create_app(
     async def read_cards(job_id: str, conn=Depends(get_conn)):
         if jobs.load_job(conn, job_id) is None:
             raise HTTPException(status_code=404, detail="job not found")
+        cards = jobs.load_cards(conn, job_id)
         return {
             "cards": [
                 {
@@ -553,9 +619,39 @@ def create_app(
                     if card.note_type == "cloze"
                     else card.front,
                 }
-                for card in jobs.load_cards(conn, job_id)
-            ]
+                for card in cards
+            ],
+            "total": len(cards),
+            # How far through the read is, so a review of 164 cards can be put
+            # down and picked up rather than restarted.
+            "reviewed_count": sum(1 for card in cards if card.reviewed),
         }
+
+    @app.post("/api/jobs/{job_id}/cards/reject")
+    async def reject_cards(
+        job_id: str,
+        body: dict,
+        conn=Depends(get_conn),
+        invite_id: str = Depends(invite_of),
+    ):
+        """Drop a selection in one call rather than one round trip per card."""
+        owned_job(conn, job_id, invite_id)
+        with db.transaction(conn):
+            dropped = jobs.reject_cards(conn, job_id, list(body.get("card_uuids") or []))
+        return {"job_id": job_id, "rejected": dropped}
+
+    @app.post("/api/jobs/{job_id}/cards/accept")
+    async def accept_cards(
+        job_id: str,
+        body: dict,
+        conn=Depends(get_conn),
+        invite_id: str = Depends(invite_of),
+    ):
+        """Mark a selection read. Accepting is what makes progress visible."""
+        owned_job(conn, job_id, invite_id)
+        with db.transaction(conn):
+            marked = jobs.accept_cards(conn, job_id, list(body.get("card_uuids") or []))
+        return {"job_id": job_id, "accepted": marked}
 
     @app.get("/api/jobs/{job_id}/diff")
     async def read_diff(

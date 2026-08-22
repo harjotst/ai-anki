@@ -248,6 +248,38 @@ def load_job(conn: sqlite3.Connection, job_id: str) -> Job | None:
     )
 
 
+def list_jobs(conn: sqlite3.Connection, invite_id: str | None) -> list[dict]:
+    """Every job this person started, newest first.
+
+    Scoped to the invite rather than filtered client-side: the list is the only
+    handle on a run once its tab is gone, so it is also the only place a job
+    could leak from.
+    """
+    rows = conn.execute(
+        "SELECT j.id, j.state, j.error, j.created_at, j.deck_id, d.name AS deck_name,"
+        "       (SELECT filename FROM source s WHERE s.job_id = j.id"
+        "         ORDER BY s.position LIMIT 1) AS source_filename,"
+        "       (SELECT COUNT(*) FROM card c WHERE c.job_id = j.id) AS card_count"
+        "  FROM job j LEFT JOIN deck d ON d.id = j.deck_id"
+        " WHERE j.invite_id IS ?"
+        " ORDER BY j.created_at DESC, j.rowid DESC",
+        (invite_id,),
+    ).fetchall()
+    return [
+        {
+            "job_id": row["id"],
+            "state": row["state"],
+            "error": row["error"],
+            "created_at": row["created_at"],
+            "deck_id": row["deck_id"],
+            "deck_name": row["deck_name"],
+            "source_filename": row["source_filename"],
+            "card_count": row["card_count"],
+        }
+        for row in rows
+    ]
+
+
 def transition(
     conn: sqlite3.Connection, job_id: str, new_state: str, *, error: str | None
 ) -> None:
@@ -416,8 +448,11 @@ def replace_plan(conn: sqlite3.Connection, job_id: str, plan: dict) -> None:
 
 def update_card(conn: sqlite3.Connection, card_uuid: str, front: str, back: str) -> bool:
     updated = conn.execute(
-        "UPDATE card SET front = ?, back = ?, question_fingerprint = ? WHERE card_uuid = ?",
-        (front, back, ledger.fingerprint(front), card_uuid),
+        # Correcting a card is the strongest evidence there is that somebody
+        # read it, so it counts as reviewed without a second click.
+        "UPDATE card SET front = ?, back = ?, question_fingerprint = ?,"
+        " reviewed_at = COALESCE(reviewed_at, ?) WHERE card_uuid = ?",
+        (front, back, ledger.fingerprint(front), time.time(), card_uuid),
     )
     return updated.rowcount > 0
 
@@ -429,6 +464,35 @@ def delete_card(conn: sqlite3.Connection, card_uuid: str) -> bool:
 def delete_topic_cards(conn: sqlite3.Connection, job_id: str, topic_id: str) -> int:
     return conn.execute(
         "DELETE FROM card WHERE job_id = ? AND topic_id = ?", (job_id, topic_id)
+    ).rowcount
+
+
+def reject_cards(conn: sqlite3.Connection, job_id: str, card_uuids: list[str]) -> int:
+    """Drop several cards at once, and report how many were actually there.
+
+    Scoped to the job so a uuid from somewhere else cannot ride along, and
+    tolerant of uuids that have already gone: the screen the user clicked was
+    always slightly out of date, and refusing the whole batch over one stale id
+    would make the button unreliable exactly when it is most useful.
+    """
+    if not card_uuids:
+        return 0
+    marks = ",".join("?" * len(card_uuids))
+    return conn.execute(
+        f"DELETE FROM card WHERE job_id = ? AND card_uuid IN ({marks})",
+        [job_id, *card_uuids],
+    ).rowcount
+
+
+def accept_cards(conn: sqlite3.Connection, job_id: str, card_uuids: list[str]) -> int:
+    """Mark cards read. Idempotent: the first time is the one that counts."""
+    if not card_uuids:
+        return 0
+    marks = ",".join("?" * len(card_uuids))
+    return conn.execute(
+        f"UPDATE card SET reviewed_at = COALESCE(reviewed_at, ?)"
+        f" WHERE job_id = ? AND card_uuid IN ({marks})",
+        [time.time(), job_id, *card_uuids],
     ).rowcount
 
 
@@ -584,6 +648,7 @@ class Card:
     match_rejected_reason: str | None = None
     duplicate_of: str | None = None
     job_id: str | None = None
+    reviewed: bool = False
 
     @property
     def tags(self) -> list[str]:
@@ -672,13 +737,20 @@ def load_cards(conn: sqlite3.Connection, job_id: str) -> list[Card]:
     rows = conn.execute(
         "SELECT c.card_uuid, c.topic_id, c.deck_path, c.note_type, c.front, c.back,"
         " c.source_page, c.difficulty, c.downgraded, c.match_rejected_reason,"
-        " c.duplicate_of"
+        " c.duplicate_of, c.reviewed_at"
         " FROM card c JOIN topic t ON t.job_id = c.job_id AND t.topic_id = c.topic_id"
         " WHERE c.job_id = ? ORDER BY t.position, c.position",
         (job_id,),
     ).fetchall()
     return [
-        Card(**{**dict(row), "downgraded": bool(row["downgraded"]), "job_id": job_id})
+        Card(
+            **{
+                **{k: v for k, v in dict(row).items() if k != "reviewed_at"},
+                "downgraded": bool(row["downgraded"]),
+                "reviewed": row["reviewed_at"] is not None,
+                "job_id": job_id,
+            }
+        )
         for row in rows
     ]
 
