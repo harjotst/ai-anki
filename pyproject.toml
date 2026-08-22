@@ -24,6 +24,11 @@ dependencies = [
     # `pg_dump` the backup shells out to comes from the postgresql-client
     # package in the Dockerfile, not from here.
     "psycopg[binary]>=3.2",
+    # Spaced-repetition scheduling. The published implementation rather than
+    # one here: FSRS is a fitted model with published parameters, and the
+    # failure mode of getting it subtly wrong is that somebody's schedule
+    # decays for months before anyone can tell.
+    "fsrs>=6.3",
     # Token verification. The `crypto` extra is the part that matters: without
     # it PyJWT can decode an RS256 token and cannot check its signature, which
     # fails open rather than closed.

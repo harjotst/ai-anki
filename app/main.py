@@ -7,6 +7,7 @@ reachable from here; nothing below it is reached into directly by tests.
 from __future__ import annotations
 
 import asyncio
+import re
 import time as _time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -17,7 +18,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Uploa
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from app import auth, backup, budget, db, generation, identity, ingestion
-from app import jobs, ledger, packaging, planning, progress, providers
+from app import jobs, ledger, packaging, planning, progress, providers, study
 from app import worker as worker_module
 
 
@@ -545,6 +546,113 @@ def create_app(
                 detail=str(exc),
                 headers={"retry-after": str(int(exc.retry_after) + 1)},
             ) from exc
+
+    # --- studying --------------------------------------------------------
+
+    def _at(value: str | None):
+        """A moment named by the caller, so tests and clients can ask about a
+        future the server has not reached yet."""
+        if not value:
+            return None
+        from datetime import datetime, timezone
+
+        # A `+` in a query value decodes to a space, which is what form
+        # encoding says it means -- so an ISO timestamp sent without escaping
+        # arrives as "...T10:00:00 00:00". Repairing it beats a 500 for a
+        # mistake every client makes once.
+        repaired = re.sub(r" (\d{2}:\d{2})$", r"+\1", value)
+        try:
+            moment = datetime.fromisoformat(repaired)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"'{value}' is not a time"
+            ) from exc
+        return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+    def owned_deck(conn, deck_id: str, account_id: str) -> str:
+        if not ledger.deck_exists(conn, deck_id, account_id):
+            raise HTTPException(status_code=404, detail="no such deck")
+        return deck_id
+
+    @app.post("/api/decks/{deck_id}/study")
+    async def start_studying(
+        deck_id: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        """Make a deck's cards studiable. Safe to call again as it grows."""
+        owned_deck(conn, deck_id, account.id)
+        with db.transaction(conn):
+            added = study.enrol(conn, account.id, deck_id)
+        return {"deck_id": deck_id, "added": added}
+
+    @app.get("/api/decks/{deck_id}/due")
+    async def read_due(
+        deck_id: str,
+        at: str | None = None,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        owned_deck(conn, deck_id, account.id)
+        return {"cards": study.due_cards(conn, account.id, deck_id, _at(at))}
+
+    @app.get("/api/decks/{deck_id}/cards")
+    async def read_deck_cards(
+        deck_id: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        owned_deck(conn, deck_id, account.id)
+        return {"cards": study.deck_cards(conn, account.id, deck_id)}
+
+    @app.get("/api/decks/{deck_id}/mastery")
+    async def read_mastery(
+        deck_id: str,
+        at: str | None = None,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        owned_deck(conn, deck_id, account.id)
+        return study.mastery(conn, account.id, deck_id, _at(at))
+
+    @app.post("/api/reviews")
+    async def record_reviews(
+        body: dict,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        """Append answers. Idempotent, in batches, and safe to retry.
+
+        A whole batch is one transaction: a client that pushed twenty reviews
+        and got a network error should find either all of them or none, not a
+        prefix it has to work out the length of.
+        """
+        reviews = list(body.get("reviews") or [])
+        for review in reviews:
+            if not study.studiable(conn, account.id, review.get("card_uuid")):
+                raise HTTPException(status_code=404, detail="no such card to review")
+        try:
+            with db.transaction(conn):
+                accepted = study.record(conn, account.id, reviews)
+        except study.UnknownRating as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"accepted": accepted, "submitted": len(reviews)}
+
+    @app.get("/api/cards/{card_uuid}/reviews")
+    async def read_card_history(
+        card_uuid: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        if not study.studiable(conn, account.id, card_uuid):
+            raise HTTPException(status_code=404, detail="no such card")
+        return {"card_uuid": card_uuid, "reviews": study.history(conn, account.id, card_uuid)}
+
+    @app.get("/api/me/activity")
+    async def read_activity(
+        conn=Depends(get_conn), account: identity.Account = Depends(account_of)
+    ):
+        return study.activity(conn, account.id)
 
     @app.get("/api/jobs/{job_id}/lessons")
     async def read_lessons(

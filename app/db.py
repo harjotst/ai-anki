@@ -204,6 +204,55 @@ CREATE TABLE IF NOT EXISTS lesson (
     PRIMARY KEY (job_id, topic_id)
 );
 
+-- Every answer anybody has ever given, and the record everything about
+-- studying is derived from. Append-only: a row is never updated and never
+-- deleted, because the moment it is, offline sync needs conflict resolution,
+-- leaderboards stop being recomputable, and the scheduler can never be
+-- replaced.
+--
+-- `client_uuid` is chosen by the device that recorded the answer. It is what
+-- makes a push idempotent: a client that lost the connection before the reply
+-- can push again without answering twice, and the client is the only thing
+-- that knows the two pushes were the same event.
+CREATE TABLE IF NOT EXISTS review (
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    account_id        UUID NOT NULL REFERENCES account(id),
+    client_uuid       TEXT NOT NULL,
+    card_uuid         TEXT NOT NULL,
+    -- FSRS's own scale: 1 again, 2 hard, 3 good, 4 easy.
+    rating            SMALLINT NOT NULL,
+    -- The device's clock, which orders one person's own history.
+    reviewed_at       TIMESTAMPTZ NOT NULL,
+    duration_ms       INTEGER,
+    -- Ours. Anything competitive uses this one, because a client's clock is a
+    -- thing a client controls.
+    received_at       TIMESTAMPTZ NOT NULL,
+    UNIQUE (account_id, client_uuid)
+);
+
+CREATE INDEX IF NOT EXISTS review_card_idx ON review(account_id, card_uuid, reviewed_at);
+
+-- One person's scheduling for one card. A projection of `review` and nothing
+-- more: it exists because replaying a whole log on every query would be
+-- wasteful, not because it is the record. It can be dropped and rebuilt at any
+-- moment, and a test asserts precisely that.
+CREATE TABLE IF NOT EXISTS study_card (
+    account_id        UUID NOT NULL REFERENCES account(id),
+    card_uuid         TEXT NOT NULL,
+    deck_id           TEXT REFERENCES deck(id),
+    -- FSRS state: 1 learning, 2 review, 3 relearning.
+    state             SMALLINT NOT NULL DEFAULT 1,
+    step              INTEGER,
+    stability         DOUBLE PRECISION,
+    difficulty        DOUBLE PRECISION,
+    due               TIMESTAMPTZ NOT NULL,
+    last_review       TIMESTAMPTZ,
+    reps              INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (account_id, card_uuid)
+);
+
+CREATE INDEX IF NOT EXISTS study_due_idx ON study_card(account_id, deck_id, due);
+
 -- Progress, as a durable record rather than a live one. A row is appended in
 -- the same transaction as the change it reports, so an event exists exactly
 -- when the change it describes survived -- which is what lets a client that was
