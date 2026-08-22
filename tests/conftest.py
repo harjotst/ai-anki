@@ -409,6 +409,9 @@ def boot(tmp_path, claude, pg_dsn, identities):
             return self
 
         def sign_in_as(self, account: str, **claims):
+            # An email by default, because a real token carries one and a
+            # nameless account is a screen with a blank where a person should be.
+            claims.setdefault("email", f"{account[-4:]}@example.test")
             self.headers.update(bearer(identities.token(account, **claims)))
             return self
 

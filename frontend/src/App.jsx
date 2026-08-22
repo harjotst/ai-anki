@@ -138,7 +138,7 @@ const STATE_LABEL = {
   failed: "Failed",
 };
 
-function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut, onStudy, onFriends }) {
+function Home({ decks, jobs, friends, onOpen, onStarted, onRenamed, onSignOut, onStudy, onFriends, onShare }) {
   const unfinished = jobs.filter((job) => !["complete", "reviewing"].includes(job.state));
 
   return (
@@ -186,6 +186,8 @@ function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut, onStudy, o
                 deck={deck}
                 onRenamed={onRenamed}
                 onStudy={onStudy}
+                friends={friends}
+                onShare={onShare}
               />
             ))}
           </ul>
@@ -204,8 +206,9 @@ function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut, onStudy, o
   );
 }
 
-function DeckRow({ deck, onRenamed, onStudy }) {
+function DeckRow({ deck, onRenamed, onStudy, friends, onShare }) {
   const [editing, setEditing] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [name, setName] = useState(deck.name);
 
   const save = async () => {
@@ -238,22 +241,54 @@ function DeckRow({ deck, onRenamed, onStudy }) {
           <span className="row-main">{deck.name}</span>
         )}
         <span className="muted small">
-          {deck.card_count} cards · {deck.job_count} run{deck.job_count === 1 ? "" : "s"}
-          {deck.last_exported_at
-            ? ` · downloaded ${new Date(deck.last_exported_at * 1000).toLocaleDateString()}`
-            : " · never downloaded"}
+          {deck.card_count} cards
+          {deck.shared_with_me
+            ? ` · from ${deck.owner_name}`
+            : ` · ${deck.job_count} run${deck.job_count === 1 ? "" : "s"}`}
+          {!deck.shared_with_me &&
+            (deck.last_exported_at
+              ? ` · downloaded ${new Date(deck.last_exported_at).toLocaleDateString()}`
+              : " · never downloaded")}
         </span>
         {!editing && (
           <>
             {deck.card_count > 0 && (
               <button onClick={() => onStudy(deck)}>Study</button>
             )}
-            <button className="ghost" onClick={() => setEditing(true)}>
-              Rename
-            </button>
+            {/* Renaming and sharing belong to whoever uploaded the material.
+                Studying somebody's deck does not make you a co-author of it. */}
+            {!deck.shared_with_me && (
+              <>
+                {friends.length > 0 && (
+                  <button className="ghost" onClick={() => setSharing(!sharing)}>
+                    Share
+                  </button>
+                )}
+                <button className="ghost" onClick={() => setEditing(true)}>
+                  Rename
+                </button>
+              </>
+            )}
           </>
         )}
       </div>
+      {sharing && (
+        <div className="row static sharing">
+          <span className="muted small">Give it to</span>
+          {friends.map((person) => (
+            <button
+              key={person.account_id}
+              className="ghost"
+              onClick={async () => {
+                await onShare(deck, person);
+                setSharing(false);
+              }}
+            >
+              {person.display_name || person.account_id.slice(0, 8)}
+            </button>
+          ))}
+        </div>
+      )}
     </li>
   );
 }
@@ -397,18 +432,21 @@ function Friends({ onBack }) {
   const [me, setMe] = useState(null);
   const [circle, setCircle] = useState(null);
   const [board, setBoard] = useState(null);
+  const [decks, setDecks] = useState([]);
   const [code, setCode] = useState("");
   const [error, setError] = useState(null);
 
   const refresh = useCallback(async () => {
-    const [who, friends, leaderboard] = await Promise.all([
+    const [who, friends, leaderboard, allDecks] = await Promise.all([
       api("/api/me"),
       api("/api/friends"),
       api("/api/leaderboard"),
+      api("/api/decks"),
     ]);
     setMe(who);
     setCircle(friends);
     setBoard(leaderboard);
+    setDecks(allDecks.decks);
   }, []);
 
   useEffect(() => {
@@ -525,10 +563,7 @@ function Friends({ onBack }) {
         how many cards you would recall right now — it goes down if you stop, which
         a review count never does.
       </p>
-      <p className="muted small">
-        Topic-by-topic comparison needs a deck you both hold. Decks belong to
-        whoever uploaded the material, so that is not possible yet.
-      </p>
+      {decks.length > 0 && <SharedDecks decks={decks} />}
 
       {circle.outgoing.length > 0 && (
         <p className="muted small">
@@ -541,6 +576,80 @@ function Friends({ onBack }) {
         Back
       </button>
     </div>
+  );
+}
+
+
+function SharedDecks({ decks }) {
+  const [open, setOpen] = useState(null);
+  const [compared, setCompared] = useState(null);
+
+  const show = async (deck) => {
+    setOpen(deck.deck_id);
+    setCompared(null);
+    setCompared(await api(`/api/decks/${deck.deck_id}/compare`));
+  };
+
+  return (
+    <>
+      <h3>Topic by topic</h3>
+      <p className="muted small">
+        {/* The honest constraint, stated where somebody would otherwise wonder
+            why their friend is missing from a deck they both study. */}
+        Only for a deck you both hold. A deck belongs to whoever uploaded the
+        material, so share one to compare on it.
+      </p>
+      <div className="topics">
+        {decks.map((deck) => (
+          <button
+            key={deck.deck_id}
+            className={deck.deck_id === open ? "topic current" : "topic"}
+            onClick={() => show(deck)}
+          >
+            {deck.name}
+          </button>
+        ))}
+      </div>
+
+      {open && !compared && <p className="muted small">Working it out…</p>}
+
+      {compared &&
+        (compared.friends.length === 0 ? (
+          <p className="muted small">{compared.why_empty}</p>
+        ) : (
+          <table className="board">
+            <thead>
+              <tr>
+                <th>Topic</th>
+                <th>You</th>
+                {compared.friends.map((friend) => (
+                  <th key={friend.account_id}>
+                    {friend.display_name || friend.account_id.slice(0, 8)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {compared.you.topics.map((topic) => (
+                <tr key={topic.deck_path}>
+                  <td>{topic.deck_path.split("::").pop()}</td>
+                  <td>{Math.round(topic.mastery * 100)}%</td>
+                  {compared.friends.map((friend) => {
+                    const match = friend.topics.find(
+                      (other) => other.deck_path === topic.deck_path
+                    );
+                    return (
+                      <td key={friend.account_id}>
+                        {match ? `${Math.round(match.mastery * 100)}%` : "—"}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ))}
+    </>
   );
 }
 
@@ -1215,8 +1324,12 @@ export default function App() {
 
   const loadHome = useCallback(async () => {
     try {
-      const [decks, jobs] = await Promise.all([api("/api/decks"), api("/api/jobs")]);
-      setHome({ decks: decks.decks, jobs: jobs.jobs });
+      const [decks, jobs, circle] = await Promise.all([
+        api("/api/decks"),
+        api("/api/jobs"),
+        api("/api/friends"),
+      ]);
+      setHome({ decks: decks.decks, jobs: jobs.jobs, friends: circle.friends });
     } catch (problem) {
       setHome(null);
       // A credential the server will not accept is worse than no credential:
@@ -1300,6 +1413,7 @@ export default function App() {
       <Home
         decks={home?.decks || []}
         jobs={home?.jobs || []}
+        friends={home?.friends || []}
         onOpen={setJobId}
         onStarted={setJobId}
         onRenamed={loadHome}
@@ -1310,6 +1424,13 @@ export default function App() {
           setStudying(deck);
         }}
         onFriends={() => setFriends(true)}
+        onShare={async (deck, person) => {
+          await api(`/api/decks/${deck.deck_id}/share`, {
+            method: "POST",
+            body: JSON.stringify({ account_id: person.account_id }),
+          });
+          loadHome();
+        }}
         onSignOut={async () => {
           await signOut();
           setHome(null);

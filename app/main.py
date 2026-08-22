@@ -131,6 +131,22 @@ def create_app(
         """Whose request this is, as the guard established it."""
         return request.state.account
 
+    def readable_job(conn, job_id: str, account_id: str) -> jobs.Job:
+        """A job whose deck this person may see, whether or not they made it.
+
+        Separate from `owned_job` because they guard different things. Reading
+        what a shared deck was taught from is the point of sharing it; changing
+        the plan, regenerating, or spending money against it is not.
+        """
+        job = jobs.load_job(conn, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        if str(job.account_id) == str(account_id):
+            return job
+        if job.deck_id and ledger.deck_exists(conn, job.deck_id, account_id):
+            return job
+        raise HTTPException(status_code=404, detail="job not found")
+
     def owned_job(conn, job_id: str, account_id: str) -> jobs.Job:
         """Load a job, but only for the person whose job it is.
 
@@ -151,8 +167,16 @@ def create_app(
         account: identity.Account = Depends(account_of),
     ):
         """Start a Job. Naming a Deck continues it; naming none begins one."""
-        if deck_id and not ledger.deck_exists(conn, deck_id, account.id):
-            raise HTTPException(status_code=404, detail="no such deck")
+        if deck_id:
+            if not ledger.deck_exists(conn, deck_id, account.id):
+                raise HTTPException(status_code=404, detail="no such deck")
+            # Studying somebody's deck does not make you a co-author of it.
+            # 403 rather than 404, because they can see it -- pretending
+            # otherwise would be confusing rather than protective.
+            if not ledger.owns_deck(conn, deck_id, account.id):
+                raise HTTPException(
+                    status_code=403, detail="only the owner can add material to this deck"
+                )
         content = await file.read()
         job_id = jobs.create_job(
             conn,
@@ -195,6 +219,10 @@ def create_app(
     ):
         if not ledger.deck_exists(conn, deck_id, account.id):
             raise HTTPException(status_code=404, detail="no such deck")
+        if not ledger.owns_deck(conn, deck_id, account.id):
+            raise HTTPException(
+                status_code=403, detail="only the owner can rename this deck"
+            )
         try:
             with db.transaction(conn):
                 ledger.rename_deck(conn, deck_id, account.id, str(body.get("name", "")))
@@ -709,6 +737,55 @@ def create_app(
             social.remove(conn, account.id, other)
         return {"account_id": other, "state": "none"}
 
+    @app.post("/api/decks/{deck_id}/share")
+    async def share_deck(
+        deck_id: str,
+        body: dict,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        """Give a friend this deck to study.
+
+        A friend, specifically. Sharing with a stranger is how somebody's
+        material reaches somebody they have never heard of, and the friendship
+        is what stands in for consent.
+        """
+        owned_deck(conn, deck_id, account.id)
+        if not ledger.owns_deck(conn, deck_id, account.id):
+            raise HTTPException(
+                status_code=403, detail="only the owner can share this deck"
+            )
+        other = str(body.get("account_id", ""))
+        if other not in social.circle(conn, account.id) or other == str(account.id):
+            raise HTTPException(
+                status_code=403, detail="you can only share with somebody you study with"
+            )
+        with db.transaction(conn):
+            ledger.share_deck(conn, deck_id, account.id, other)
+        return {"deck_id": deck_id, "account_id": other}
+
+    @app.delete("/api/decks/{deck_id}/share/{other}")
+    async def unshare_deck(
+        deck_id: str,
+        other: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        """Take a deck back.
+
+        Their scheduling for it goes; their review log stays. The log records
+        work somebody actually did, and it is what every leaderboard has
+        already counted -- rewriting it would be rewriting history.
+        """
+        owned_deck(conn, deck_id, account.id)
+        if not ledger.owns_deck(conn, deck_id, account.id):
+            raise HTTPException(
+                status_code=403, detail="only the owner can unshare this deck"
+            )
+        with db.transaction(conn):
+            ledger.unshare_deck(conn, deck_id, other)
+        return {"deck_id": deck_id, "account_id": other, "shared": False}
+
     @app.get("/api/leaderboard")
     async def read_leaderboard(
         days: int = social.DEFAULT_WINDOW_DAYS,
@@ -738,7 +815,7 @@ def create_app(
         job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """Everything this job taught, in the order the plan put its topics."""
-        owned_job(conn, job_id, account.id)
+        readable_job(conn, job_id, account.id)
         return {"job_id": job_id, "lessons": jobs.load_lessons(conn, job_id)}
 
     @app.get("/api/jobs/{job_id}/topics/{topic_id}/lesson")
@@ -748,7 +825,7 @@ def create_app(
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
     ):
-        owned_job(conn, job_id, account.id)
+        readable_job(conn, job_id, account.id)
         lesson = jobs.load_lesson(conn, job_id, topic_id)
         if lesson is None:
             raise HTTPException(status_code=404, detail="this topic has not been taught yet")
