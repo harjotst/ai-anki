@@ -69,12 +69,55 @@ def create_deck(conn: psycopg.Connection, name: str, account_id: str | None) -> 
     return deck_id
 
 
-def deck_exists(conn: psycopg.Connection, deck_id: str, account_id: str | None) -> bool:
-    row = conn.execute(
+def owns_deck(conn: psycopg.Connection, deck_id: str, account_id: str | None) -> bool:
+    """Whoever uploaded the material. They alone may rename it, add to it, or
+    hand it to somebody else."""
+    return conn.execute(
         "SELECT 1 FROM deck WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
         (deck_id, account_id),
-    ).fetchone()
-    return row is not None
+    ).fetchone() is not None
+
+
+def deck_exists(conn: psycopg.Connection, deck_id: str, account_id: str | None) -> bool:
+    """May this person see and study this deck at all?
+
+    Owning it or having been given it. Kept as a separate question from
+    `owns_deck` rather than a flag on one function, because the two answers
+    guard different things and a boolean argument is how they end up confused.
+    """
+    return conn.execute(
+        "SELECT 1 FROM deck d"
+        " LEFT JOIN deck_member m ON m.deck_id = d.id AND m.account_id = %s"
+        " WHERE d.id = %s AND (d.account_id IS NOT DISTINCT FROM %s OR m.account_id IS NOT NULL)",
+        (account_id, deck_id, account_id),
+    ).fetchone() is not None
+
+
+def share_deck(
+    conn: psycopg.Connection, deck_id: str, account_id: str, with_account: str
+) -> None:
+    conn.execute(
+        "INSERT INTO deck_member (deck_id, account_id, shared_by, created_at)"
+        " VALUES (%s, %s, %s, %s) ON CONFLICT (deck_id, account_id) DO NOTHING",
+        (deck_id, with_account, account_id, db.now()),
+    )
+
+
+def unshare_deck(conn: psycopg.Connection, deck_id: str, from_account: str) -> bool:
+    """Take a deck back.
+
+    Their study cards go with it; their review log does not. The log is a
+    record of work somebody did, and unsharing is not a reason to rewrite it --
+    it is also what every leaderboard already counted.
+    """
+    conn.execute(
+        "DELETE FROM study_card WHERE deck_id = %s AND account_id = %s",
+        (deck_id, from_account),
+    )
+    return conn.execute(
+        "DELETE FROM deck_member WHERE deck_id = %s AND account_id = %s",
+        (deck_id, from_account),
+    ).rowcount > 0
 
 
 class DeckNameRejected(Exception):
@@ -91,12 +134,17 @@ def list_decks(conn: psycopg.Connection, account_id: str | None) -> list[dict]:
     """
     rows = conn.execute(
         "SELECT d.id, d.name, d.created_at, d.last_exported_at,"
+        "       (d.account_id IS DISTINCT FROM %s) AS shared_with_me,"
+        "       COALESCE(owner.display_name, owner.email, owner.id::text) AS owner_name,"
         "       (SELECT COUNT(DISTINCT c.card_uuid) FROM card c WHERE c.deck_id = d.id)"
         "         AS card_count,"
         "       (SELECT COUNT(*) FROM job j WHERE j.deck_id = d.id) AS job_count"
-        "  FROM deck d WHERE d.account_id IS NOT DISTINCT FROM %s"
+        "  FROM deck d"
+        "  LEFT JOIN deck_member m ON m.deck_id = d.id AND m.account_id = %s"
+        "  LEFT JOIN account owner ON owner.id = d.account_id"
+        " WHERE d.account_id IS NOT DISTINCT FROM %s OR m.account_id IS NOT NULL"
         " ORDER BY d.created_at DESC",
-        (account_id,),
+        (account_id, account_id, account_id),
     ).fetchall()
     return [
         {
@@ -110,6 +158,8 @@ def list_decks(conn: psycopg.Connection, account_id: str | None) -> list[dict]:
             ),
             "card_count": row["card_count"],
             "job_count": row["job_count"],
+            "shared_with_me": bool(row["shared_with_me"]),
+            "owner_name": row["owner_name"],
         }
         for row in rows
     ]

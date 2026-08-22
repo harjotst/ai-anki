@@ -292,7 +292,19 @@ def compare(conn: psycopg.Connection, account_id: str, deck_id: str) -> dict:
             (other, deck_id),
         ).fetchone()
         if holds:
-            friends.append({"account_id": other, **study.mastery(conn, other, deck_id)})
+            named = conn.execute(
+                "SELECT COALESCE(display_name, email, id::text) AS name FROM account"
+                " WHERE id = %s",
+                (other,),
+            ).fetchone()
+            friends.append(
+                {
+                    "account_id": other,
+                    # A column headed with a uuid is a column nobody reads.
+                    "display_name": named["name"] if named else None,
+                    **study.mastery(conn, other, deck_id),
+                }
+            )
 
     return {
         "deck_id": deck_id,

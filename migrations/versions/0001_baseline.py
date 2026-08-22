@@ -28,6 +28,7 @@ TABLES = (
     "job_event",
     "lesson",
     "friendship",
+    "deck_member",
     "study_card",
     "review",
     "card",

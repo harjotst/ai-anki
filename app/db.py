@@ -258,6 +258,25 @@ CREATE TABLE IF NOT EXISTS study_card (
 
 CREATE INDEX IF NOT EXISTS study_due_idx ON study_card(account_id, deck_id, due);
 
+-- Who studies a deck they did not make. The deck's own `account_id` is still
+-- the owner -- whoever uploaded the material and can add more of it -- and this
+-- is everybody else.
+--
+-- Joined, not copied. Both people study the same card identities, which is the
+-- only arrangement in which "who has mastered this topic" is a question about
+-- one thing rather than two things that resemble each other. Scheduling has
+-- always been keyed on (account, card), so separate histories over shared cards
+-- needed nothing new.
+CREATE TABLE IF NOT EXISTS deck_member (
+    deck_id           TEXT NOT NULL REFERENCES deck(id) ON DELETE CASCADE,
+    account_id        UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    shared_by         UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    created_at        TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (deck_id, account_id)
+);
+
+CREATE INDEX IF NOT EXISTS deck_member_account_idx ON deck_member(account_id);
+
 -- One row per friendship, never two. Storing both directions means two rows
 -- that can disagree, and eventually they do: somebody removes a friend and half
 -- of it is left behind. The pair is ordered so the row is unique whichever way
