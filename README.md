@@ -5,15 +5,22 @@ material — then keep them up to date as the course goes on, without duplicatin
 single card you have already been reviewing.
 
 Upload a lecture PDF, a chapter, a slide deck or a spreadsheet. The application reads
-it, proposes a deck plan you can edit before anything expensive runs, generates the
-cards, and shows you exactly what downloading would change in your collection.
+it, proposes a deck plan you can edit before anything expensive runs, **teaches you each
+topic**, generates the cards that reinforce it, and shows you exactly what downloading
+would change in your collection.
 
 ---
 
 ## Why this is not "PDF in, flashcards out"
 
-Most tools that do this fail in one of two ways, and the interesting parts of this
-codebase are the answers to those two failures.
+Most tools that do this fail in one of three ways, and the interesting parts of this
+codebase are the answers to those failures.
+
+**They hand you cards on material you have not understood.** Which is worse than
+handing you nothing: you drill a wrong model into long-term memory and the scheduler
+faithfully keeps it there. So each topic is *taught* first — concepts in dependency
+order, a worked example, and the misconceptions people actually hold. That last part is
+what a textbook does badly and what stops a card being failed for six weeks.
 
 **They produce the same flat pile of cards regardless of the source.** A dense
 pharmacology chapter and a padded syllabus come out looking identical. Here, pass 1
@@ -67,11 +74,11 @@ Found by building the image and running a restore, not by reading about it.
 | **Backend** | FastAPI, Postgres (psycopg 3), Alembic |
 | **Auth** | Supabase — Google, Apple, email |
 | **Frontend** | React + Vite |
-| **Generation** | Anthropic API, two passes, prompt caching, structured outputs |
+| **Generation** | Anthropic API, three passes, prompt caching, structured outputs |
 | **Packaging** | genanki, with the official `anki` package as a *test-only* dependency |
 | **Deployment** | Fly.io, one machine, LibreOffice for conversion |
 
-**226 tests, and only two seams.** The Anthropic API is faked at the HTTP transport
+**235 tests, and only two seams.** The Anthropic API is faked at the HTTP transport
 only, so the real SDK stays in the loop and SDK misuse still fails a test. The database
 is a real Postgres in a container, because a fake would accept queries the real server
 rejects. Everything else drives the application through its own HTTP boundary — which
@@ -103,10 +110,11 @@ restore procedure.
 
 ## What it costs
 
-Measured on a real run: a 52,000-token biochemistry PDF produced 24 topics and 164
-cards for **$2.75**, in about four minutes — now closer to one, since topics generate
-concurrently. The estimate is shown before you approve the plan, priced against the
-plan you are actually looking at rather than an assumed topic count.
+Measured on real runs: a 52,000-token biochemistry PDF produced 24 topics and 164 cards
+for **$2.75**. Teaching those same topics adds about **$3.80** — the first lesson writes
+the cache and costs $0.64, every one after it reads and costs $0.14. The estimate is
+shown before you approve the plan, priced against the plan you are actually looking at
+rather than an assumed topic count, and it counts both passes.
 
 Spend is bounded at four layers: a per-job token ceiling, rolling 24-hour budgets per
 person and overall, a kill switch that works without a redeploy, and the provider-side
@@ -116,13 +124,14 @@ monthly cap as the backstop that survives a bug in this application.
 
 ## Status
 
-The generation pipeline, the deck lineage and the Anki export are finished and in use.
-Accounts and Postgres are done; the Supabase project itself is not yet provisioned.
+The generation pipeline, the deck lineage, the Anki export and the lesson pass are
+finished and in use. Accounts and Postgres are done; the Supabase project itself is not
+yet provisioned.
 
-`docs/superpowers/specs/` contains the design for what comes next: the application
-teaching the material rather than only drilling it — generated lessons per topic, a
-tutor summoned when your review history shows a topic decaying, and mastery defined as
-mean FSRS retrievability rather than as a marketing word.
+`docs/superpowers/specs/` has the design for what comes next: studying inside the
+application rather than exporting to Anki, a tutor summoned when your review history
+shows a topic decaying, and mastery defined as mean FSRS retrievability rather than as
+a marketing word.
 
 ## Documentation
 
