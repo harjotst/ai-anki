@@ -73,19 +73,44 @@ export default function Shell() {
 export function useSession() {
   const [session, setSession] = useState(undefined);
   useEffect(() => {
+    let cancelled = false;
     // A development token counts as signed in regardless of configuration —
     // the server holds the actual door.
     if (window.localStorage.getItem("ai_anki_dev_token")) {
       setSession({ local: true });
       return undefined;
     }
+    // The dev harness serves a token endpoint; production serves a 404 here,
+    // so trying costs nothing and signing in locally costs no pasting.
+    const tryDev = async () => {
+      try {
+        const r = await fetch("/dev/token");
+        if (!r.ok) return false;
+        const { token } = await r.json();
+        if (!token || cancelled) return false;
+        window.localStorage.setItem("ai_anki_dev_token", token);
+        setSession({ local: true });
+        return true;
+      } catch {
+        return false;
+      }
+    };
     if (!configured) {
-      setSession(null);
-      return undefined;
+      tryDev().then((ok) => !ok && !cancelled && setSession(null));
+      return () => { cancelled = true; };
     }
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
-    return () => data.subscription.unsubscribe();
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (data.session) return setSession(data.session);
+      if (!(await tryDev()) && !cancelled) setSession(null);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, next) => {
+      // Never let the initial null overwrite a development session.
+      if (next || !window.localStorage.getItem("ai_anki_dev_token")) setSession(next);
+    });
+    return () => {
+      cancelled = true;
+      data.subscription.unsubscribe();
+    };
   }, []);
   return session;
 }

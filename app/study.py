@@ -181,7 +181,7 @@ def rebuild(conn: psycopg.Connection, account_id: str, card_uuid: str) -> None:
             card, _ = _scheduler.review_card(
                 card,
                 Rating(entry["rating"]),
-                entry["reviewed_at"],
+                _utc(entry["reviewed_at"]),
                 entry["duration_ms"],
             )
 
@@ -408,7 +408,8 @@ def _previews(row, at: datetime) -> dict:
             return Card()
         return Card(
             state=row["state"], step=row["step"], stability=row["stability"],
-            difficulty=row["difficulty"], due=row["due"], last_review=row["last_review"],
+            difficulty=row["difficulty"], due=_utc(row["due"]),
+            last_review=_utc(row["last_review"]),
         )
 
     out = {}
@@ -443,10 +444,23 @@ def _retrievability(row, at: datetime) -> float:
         step=row["step"],
         stability=row["stability"],
         difficulty=row["difficulty"],
-        due=row["due"],
-        last_review=row["last_review"],
+        due=_utc(row["due"]),
+        last_review=_utc(row["last_review"]),
     )
     return float(_scheduler.get_card_retrievability(card, at))
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    """The exact UTC the scheduler insists on.
+
+    psycopg hands back TIMESTAMPTZ in the session's timezone -- `timezone.utc`
+    when the server says "UTC", but `ZoneInfo("Etc/UTC")` when it says
+    "Etc/UTC", which is the Docker image's default. FSRS compares `tzinfo`
+    against `timezone.utc` by equality, so the same moment in the second
+    spelling is rejected. Normalising here makes recording reviews independent
+    of how the database's timezone happens to be spelled.
+    """
+    return None if value is None else value.astimezone(timezone.utc)
 
 
 def _moment(value) -> datetime:

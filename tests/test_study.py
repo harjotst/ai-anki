@@ -375,3 +375,34 @@ def test_previews_reflect_the_cards_actual_history(client, claude):
     )
 
     assert matured["previews"]["good"].endswith(("d", "mo")), matured["previews"]
+
+
+def test_reviews_record_whatever_the_database_calls_utc(client, claude, pg_dsn):
+    """The scheduler insists on `timezone.utc` exactly; psycopg hands back
+    whatever the session's timezone is spelled as. On a server whose default
+    is 'Etc/UTC' — the Docker image's default — every read-back datetime
+    arrives as ZoneInfo("Etc/UTC"), which is the same moment and a different
+    object. Recording a review must not care.
+    """
+    import psycopg
+
+    base = pg_dsn.split("?")[0]
+    schema = pg_dsn.split("search_path%3D")[1]
+    admin = psycopg.connect(base, autocommit=True)
+    dbname = admin.execute("SELECT current_database()").fetchone()[0]
+    admin.execute(f'ALTER DATABASE "{dbname}" SET timezone TO \'Etc/UTC\'')
+    admin.close()
+    try:
+        deck_id, _ = studied_deck(client, claude)
+        first = due(client, deck_id)[0]
+        replied = answer(client, first["card_uuid"], "easy")
+        assert replied.status_code == 200, replied.text
+        assert replied.json()["accepted"] == 1
+        # And the projection actually moved — the rebuild ran over the
+        # read-back history, which is where the wrong spelling used to land.
+        remaining = due(client, deck_id)
+        assert first["card_uuid"] not in [c["card_uuid"] for c in remaining]
+    finally:
+        admin = psycopg.connect(base, autocommit=True)
+        admin.execute(f'ALTER DATABASE "{dbname}" RESET timezone')
+        admin.close()
