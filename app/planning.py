@@ -105,7 +105,34 @@ def text_document(text: str, filename: str) -> dict:
     }
 
 
-def build_plan_request(documents: list[dict], provider) -> dict:
+def existing_topics_block(existing: list[dict]) -> str:
+    """Tell pass 1 what the deck it is being added to already covers.
+
+    Without this, week two invents its own identifiers for ground week one
+    already holds. Pass 2 looks up existing cards by (deck, topic_id), so a
+    renamed topic finds nothing to revise and every improved card arrives as a
+    second note asking the same question — which the user then drills twice.
+
+    Costs nothing to include: pass 1 is uncached, so a block that varies per
+    deck breaks no prefix.
+    """
+    if not existing:
+        return ""
+    lines = "\n".join(
+        f"- {topic['topic_id']} ({topic['path']}): {topic['card_count']} cards"
+        for topic in existing
+    )
+    return (
+        "\n\nEXISTING TOPICS in the deck this material is being added to:\n"
+        f"{lines}\n\n"
+        "Where this material covers ground one of these already holds, reuse "
+        "that topic's topic_id and path VERBATIM. That is what lets an improved "
+        "card update the note the user has been reviewing instead of arriving "
+        "beside it. Invent a new topic_id only for genuinely new ground.\n"
+    )
+
+
+def build_plan_request(documents: list[dict], provider, existing_topics=None) -> dict:
     """Assemble the pass-1 request.
 
     Deliberately NOT cached. Measured against the live API: a request carrying
@@ -117,7 +144,7 @@ def build_plan_request(documents: list[dict], provider) -> dict:
     return provider.build_request(
         system=SYSTEM,
         documents=documents,
-        instruction=PLAN_INSTRUCTION,
+        instruction=PLAN_INSTRUCTION + existing_topics_block(existing_topics or []),
         schema=DECK_PLAN_SCHEMA,
         max_tokens=16000,
         cache=None,

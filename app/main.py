@@ -210,6 +210,44 @@ def create_app(
         )
         return JSONResponse({"job_id": job_id}, status_code=201)
 
+    def plan_request_for(conn, job_id: str, job=None):
+        """The pass-1 request for a job, including what its deck already holds.
+
+        Shared by the three places that build it — the call itself, the size
+        guard, and the estimate — because a guard that measures a different
+        request from the one sent is not a guard.
+        """
+        job = job or jobs.load_job(conn, job_id)
+        existing = ledger.deck_topics(conn, job.deck_id) if job and job.deck_id else []
+        return planning.build_plan_request(
+            jobs.documents_for(conn, job_id, provider), provider, existing
+        )
+
+    @app.get("/api/jobs")
+    async def list_jobs(conn=Depends(get_conn), invite_id: str = Depends(invite_of)):
+        """Everything this person has started. The way back to a run."""
+        return {"jobs": jobs.list_jobs(conn, invite_id)}
+
+    @app.get("/api/decks")
+    async def list_decks(conn=Depends(get_conn), invite_id: str = Depends(invite_of)):
+        return {"decks": ledger.list_decks(conn, invite_id)}
+
+    @app.patch("/api/decks/{deck_id}")
+    async def rename_deck(
+        deck_id: str,
+        body: dict,
+        conn=Depends(get_conn),
+        invite_id: str = Depends(invite_of),
+    ):
+        if not ledger.deck_exists(conn, deck_id, invite_id):
+            raise HTTPException(status_code=404, detail="no such deck")
+        try:
+            with db.transaction(conn):
+                ledger.rename_deck(conn, deck_id, invite_id, str(body.get("name", "")))
+        except ledger.DeckNameRejected as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"deck_id": deck_id}
+
     @app.get("/api/jobs/{job_id}")
     async def read_job(
         job_id: str, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
@@ -277,8 +315,7 @@ def create_app(
         _claim(conn, job_id, jobs.PLANNING)
 
         try:
-            documents = jobs.documents_for(conn, job_id, provider)
-            request = planning.build_plan_request(documents, provider)
+            request = plan_request_for(conn, job_id, job)
             # Measured before anything is generated, over the request that is
             # about to be sent rather than an approximation of it. A job that is
             # too large must cost nothing beyond this count.
@@ -360,9 +397,8 @@ def create_app(
         cannot keep.
         """
         job = owned_job(conn, job_id, invite_id)
-        documents = jobs.documents_for(conn, job_id, provider)
         input_tokens = ingestion.count_input_tokens(
-            provider, planning.build_plan_request(documents, provider)
+            provider, plan_request_for(conn, job_id, job)
         )
         jobs.record_input_tokens(conn, job_id, input_tokens)
 
@@ -488,7 +524,7 @@ def create_app(
         guard_size(
             conn,
             job_id,
-            planning.build_plan_request(jobs.documents_for(conn, job_id, provider), provider),
+            plan_request_for(conn, job_id, job),
         )
         if worker.draining:
             # Claiming an attempt we cannot run would spend one of the three
@@ -544,6 +580,7 @@ def create_app(
     async def read_cards(job_id: str, conn=Depends(get_conn)):
         if jobs.load_job(conn, job_id) is None:
             raise HTTPException(status_code=404, detail="job not found")
+        cards = jobs.load_cards(conn, job_id)
         return {
             "cards": [
                 {
@@ -553,9 +590,39 @@ def create_app(
                     if card.note_type == "cloze"
                     else card.front,
                 }
-                for card in jobs.load_cards(conn, job_id)
-            ]
+                for card in cards
+            ],
+            "total": len(cards),
+            # How far through the read is, so a review of 164 cards can be put
+            # down and picked up rather than restarted.
+            "reviewed_count": sum(1 for card in cards if card.reviewed),
         }
+
+    @app.post("/api/jobs/{job_id}/cards/reject")
+    async def reject_cards(
+        job_id: str,
+        body: dict,
+        conn=Depends(get_conn),
+        invite_id: str = Depends(invite_of),
+    ):
+        """Drop a selection in one call rather than one round trip per card."""
+        owned_job(conn, job_id, invite_id)
+        with db.transaction(conn):
+            dropped = jobs.reject_cards(conn, job_id, list(body.get("card_uuids") or []))
+        return {"job_id": job_id, "rejected": dropped}
+
+    @app.post("/api/jobs/{job_id}/cards/accept")
+    async def accept_cards(
+        job_id: str,
+        body: dict,
+        conn=Depends(get_conn),
+        invite_id: str = Depends(invite_of),
+    ):
+        """Mark a selection read. Accepting is what makes progress visible."""
+        owned_job(conn, job_id, invite_id)
+        with db.transaction(conn):
+            marked = jobs.accept_cards(conn, job_id, list(body.get("card_uuids") or []))
+        return {"job_id": job_id, "accepted": marked}
 
     @app.get("/api/jobs/{job_id}/diff")
     async def read_diff(

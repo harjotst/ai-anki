@@ -69,6 +69,59 @@ def deck_exists(conn: sqlite3.Connection, deck_id: str, invite_id: str | None) -
     return row is not None
 
 
+class DeckNameRejected(Exception):
+    """A name Anki could not show, or a person could not tell apart from blank."""
+
+
+def list_decks(conn: sqlite3.Connection, invite_id: str | None) -> list[dict]:
+    """The decks this person is building, most recently created first.
+
+    `last_exported_at` is None rather than 0 for a deck nothing has been
+    downloaded from yet. The distinction matters on screen: zero reads as a
+    date, and a deck that has never reached the user's collection must not
+    claim to have.
+    """
+    rows = conn.execute(
+        "SELECT d.id, d.name, d.created_at, d.last_exported_at,"
+        "       (SELECT COUNT(DISTINCT c.card_uuid) FROM card c WHERE c.deck_id = d.id)"
+        "         AS card_count,"
+        "       (SELECT COUNT(*) FROM job j WHERE j.deck_id = d.id) AS job_count"
+        "  FROM deck d WHERE d.invite_id IS ?"
+        " ORDER BY d.created_at DESC",
+        (invite_id,),
+    ).fetchall()
+    return [
+        {
+            "deck_id": row["id"],
+            "name": row["name"],
+            "created_at": row["created_at"],
+            "last_exported_at": row["last_exported_at"] or None,
+            "card_count": row["card_count"],
+            "job_count": row["job_count"],
+        }
+        for row in rows
+    ]
+
+
+def rename_deck(
+    conn: sqlite3.Connection, deck_id: str, invite_id: str | None, name: str
+) -> None:
+    """Give a deck a name a person chose.
+
+    Decks are named after whatever file started them, which is how somebody
+    ends up with a deck called `week-3-final-FINAL.pdf` and no idea what is in
+    it six weeks later.
+    """
+    cleaned = " ".join(name.split())
+    if not cleaned:
+        raise DeckNameRejected("a deck needs a name")
+    if "::" in cleaned:
+        # Anki reads `::` as deck nesting, so a name containing it would silently
+        # become a tree the user did not ask for.
+        raise DeckNameRejected("a deck name cannot contain '::'")
+    conn.execute("UPDATE deck SET name = ? WHERE id = ?", (cleaned[:120], deck_id))
+
+
 def entries(conn: sqlite3.Connection, deck_id: str) -> list[dict]:
     # One entry per card identity, not per generated row. A card that survives
     # into a later Job appears once, as its most recent generation — the ledger
@@ -115,6 +168,29 @@ def exported_cards(conn: sqlite3.Connection, deck_id: str, topic_id: str | None 
         params.append(topic_id)
     sql += " GROUP BY card_uuid"
     return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def deck_topics(conn: sqlite3.Connection, deck_id: str) -> list[dict]:
+    """The topics this deck has already put in front of the user.
+
+    Identified by the `topic_id` a later plan has to reuse verbatim: slot
+    matching looks up existing cards by (deck, topic), so a plan that renames a
+    topic makes every revision of it a brand new note.
+    """
+    rows = conn.execute(
+        "SELECT topic_id, deck_path, COUNT(DISTINCT card_uuid) AS card_count FROM card"
+        " WHERE deck_id = ? AND exported_at IS NOT NULL AND retired_at IS NULL"
+        " GROUP BY topic_id, deck_path ORDER BY deck_path",
+        (deck_id,),
+    ).fetchall()
+    return [
+        {
+            "topic_id": row["topic_id"],
+            "path": row["deck_path"],
+            "card_count": row["card_count"],
+        }
+        for row in rows
+    ]
 
 
 def resolve_claim(prior: dict | None, front: str, note_type: str) -> tuple[bool, str | None]:
