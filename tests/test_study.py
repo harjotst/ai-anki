@@ -276,3 +276,34 @@ def test_a_review_of_a_card_you_do_not_own_is_refused(boot, claude):
         refused = answer(machine, card, "good", client_uuid="theirs")
 
         assert refused.status_code == 404
+
+
+def test_a_cloze_card_is_asked_rather_than_shown(client, claude):
+    """Showing the markup does not merely make it hard to judge — the answer is
+    written in it."""
+    claude.replies_json(PLAN)
+    job_id = upload(client)
+    client.post(f"/api/jobs/{job_id}/plan")
+    claude.answers(
+        lesson=LESSON,
+        cards={
+            "cards": [
+                {
+                    "note_type": "cloze",
+                    "front": "Glycolysis happens in the {{c1::cytosol}}.",
+                    "back": "",
+                    "source_page": 1,
+                    "existing_card_id": None,
+                }
+            ]
+        },
+    )
+    client.post(f"/api/jobs/{job_id}/generate")
+    deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
+    client.post(f"/api/decks/{deck_id}/study")
+
+    card = due(client, deck_id)[0]
+
+    assert card["front"] == "Glycolysis happens in the {{c1::cytosol}}."
+    assert card["rendered_front"] == "Glycolysis happens in the [...]."
+    assert "cytosol" not in card["rendered_front"]

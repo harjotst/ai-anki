@@ -139,3 +139,15 @@ button.primary { padding: .6rem 1.2rem; margin-right: .75rem; margin-bottom: .75
 .checks li { margin-bottom: .5rem; }
 .topic.pending { border-style: dashed; color: var(--muted); cursor: default;
                  background: transparent; }
+
+/* --- studying ---------------------------------------------------------- */
+.study { text-align: center; }
+.study .face { padding: 2rem 1rem; font-size: 1.2rem; line-height: 1.5; }
+.study .face.front { font-weight: 560; }
+.study .face.back { border-top: 1px solid var(--line); color: var(--muted); }
+.study .reveal { width: 100%; padding: .9rem; margin: 1rem 0; }
+.ratings { display: grid; grid-template-columns: repeat(4, 1fr); gap: .4rem; margin: 1.25rem 0; }
+.ratings button { display: flex; flex-direction: column; gap: .15rem; padding: .6rem .3rem;
+                  background: #f3f1ec; color: var(--ink); }
+.ratings button:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.ratings .hint { font-size: .68rem; opacity: .65; }

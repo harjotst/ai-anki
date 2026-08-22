@@ -138,7 +138,7 @@ const STATE_LABEL = {
   failed: "Failed",
 };
 
-function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut }) {
+function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut, onStudy }) {
   const unfinished = jobs.filter((job) => !["complete", "reviewing"].includes(job.state));
 
   return (
@@ -181,7 +181,12 @@ function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut }) {
           <h2>Your decks</h2>
           <ul className="rows">
             {decks.map((deck) => (
-              <DeckRow key={deck.deck_id} deck={deck} onRenamed={onRenamed} />
+              <DeckRow
+                key={deck.deck_id}
+                deck={deck}
+                onRenamed={onRenamed}
+                onStudy={onStudy}
+              />
             ))}
           </ul>
         </div>
@@ -196,7 +201,7 @@ function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut }) {
   );
 }
 
-function DeckRow({ deck, onRenamed }) {
+function DeckRow({ deck, onRenamed, onStudy }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(deck.name);
 
@@ -236,9 +241,14 @@ function DeckRow({ deck, onRenamed }) {
             : " · never downloaded"}
         </span>
         {!editing && (
-          <button className="ghost" onClick={() => setEditing(true)}>
-            Rename
-          </button>
+          <>
+            {deck.card_count > 0 && (
+              <button onClick={() => onStudy(deck)}>Study</button>
+            )}
+            <button className="ghost" onClick={() => setEditing(true)}>
+              Rename
+            </button>
+          </>
         )}
       </div>
     </li>
@@ -374,6 +384,108 @@ function PlanEditor({ jobId, plan, onApproved }) {
         </button>
       </div>
       {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+// --- studying ------------------------------------------------------------
+
+const RATINGS = [
+  ["again", "Again", "I did not know it"],
+  ["hard", "Hard", "I got there, slowly"],
+  ["good", "Good", "I knew it"],
+  ["easy", "Easy", "Too easy"],
+];
+
+function Study({ deckId, deckName, onDone }) {
+  const [queue, setQueue] = useState(null);
+  const [shown, setShown] = useState(false);
+  const [done, setDone] = useState(0);
+  const [busy, setBusy] = useState(false);
+  // When this card was put in front of the person. Sent with the answer,
+  // because how long a card took is a signal the scheduler uses.
+  const started = useRef(Date.now());
+
+  useEffect(() => {
+    api(`/api/decks/${deckId}/due`).then((body) => setQueue(body.cards));
+  }, [deckId]);
+
+  if (!queue) return <div className="panel narrow muted">Loading…</div>;
+
+  const card = queue[0];
+
+  const rate = async (rating) => {
+    setBusy(true);
+    try {
+      await api("/api/reviews", {
+        method: "POST",
+        body: JSON.stringify({
+          reviews: [
+            {
+              // Chosen here, not by the server. It is what makes a retry after
+              // a lost connection add nothing instead of answering twice, and
+              // this is the only place that knows the two pushes are one event.
+              client_uuid: crypto.randomUUID(),
+              card_uuid: card.card_uuid,
+              rating,
+              reviewed_at: new Date().toISOString(),
+              duration_ms: Date.now() - started.current,
+            },
+          ],
+        }),
+      });
+      setQueue(queue.slice(1));
+      setShown(false);
+      setDone(done + 1);
+      started.current = Date.now();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!card)
+    return (
+      <div className="panel narrow">
+        <h2>{done > 0 ? "Done for now" : "Nothing due"}</h2>
+        <p className="muted">
+          {done > 0
+            ? `${done} card${done === 1 ? "" : "s"} reviewed. The rest come back when they are due.`
+            : "Everything in this deck is scheduled ahead. Come back later."}
+        </p>
+        <button onClick={onDone}>Back to your decks</button>
+      </div>
+    );
+
+  return (
+    <div className="panel narrow study">
+      <p className="muted small">
+        {deckName} · {queue.length} to go{done > 0 && ` · ${done} done`}
+      </p>
+
+      <div className="face front">{card.rendered_front || card.front}</div>
+
+      {shown ? (
+        <>
+          <div className="face back">{card.back}</div>
+          <p className="muted small">{card.deck_path}</p>
+          <div className="ratings">
+            {RATINGS.map(([value, label, hint]) => (
+              <button key={value} disabled={busy} onClick={() => rate(value)}>
+                <span>{label}</span>
+                <span className="hint">{hint}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <button className="reveal" onClick={() => setShown(true)}>
+          Show the answer
+        </button>
+      )}
+
+      <button className="ghost" onClick={onDone}>
+        Stop for now
+      </button>
     </div>
   );
 }
@@ -917,6 +1029,9 @@ export default function App() {
   // Teaching comes first; the cards are what reinforce it. This flips once the
   // reader is done with the lessons, or says they would rather skip them.
   const [reviewing, setReviewing] = useState(false);
+  // The deck being studied, if any. Studying is not a job, so it lives beside
+  // the job state rather than inside it.
+  const [studying, setStudying] = useState(null);
   // What this person already has. Loaded once past the door and refreshed
   // whenever they come back to it: the home screen is the only handle on a run
   // once its tab is gone.
@@ -945,9 +1060,16 @@ export default function App() {
     try {
       const [decks, jobs] = await Promise.all([api("/api/decks"), api("/api/jobs")]);
       setHome({ decks: decks.decks, jobs: jobs.jobs });
-    } catch {
-      // Not signed in yet, which the door below handles.
+    } catch (problem) {
       setHome(null);
+      // A credential the server will not accept is worse than no credential:
+      // it renders an empty home, which reads as "you have nothing" rather
+      // than "you are not signed in". Seen for real against a development key
+      // that had been rotated.
+      if (String(problem.message).includes("sign in")) {
+        window.localStorage.removeItem("ai_anki_dev_token");
+        setSession(null);
+      }
     }
   }, []);
 
@@ -1002,6 +1124,18 @@ export default function App() {
   if (session === undefined) return <div className="panel narrow muted">Loading…</div>;
   if (!session) return <SignIn />;
 
+  if (studying)
+    return (
+      <Study
+        deckId={studying.deck_id}
+        deckName={studying.name}
+        onDone={() => {
+          setStudying(null);
+          loadHome();
+        }}
+      />
+    );
+
   if (!jobId)
     return (
       <Home
@@ -1010,6 +1144,12 @@ export default function App() {
         onOpen={setJobId}
         onStarted={setJobId}
         onRenamed={loadHome}
+        onStudy={async (deck) => {
+          // Enrolling is safe to repeat: it adds cards a later job produced and
+          // leaves the scheduling of everything else alone.
+          await api(`/api/decks/${deck.deck_id}/study`, { method: "POST" });
+          setStudying(deck);
+        }}
         onSignOut={async () => {
           await signOut();
           setHome(null);

@@ -354,9 +354,17 @@ def activity(conn: psycopg.Connection, account_id: str) -> dict:
 
 
 def _as_card(row) -> dict:
+    from app.planning import render_cloze
+
     return {
         "card_uuid": row["card_uuid"],
         "front": row["front"],
+        # A cloze card shown as its markup is not merely hard to judge -- it
+        # has the answer written in it. Rendering is the difference between
+        # being asked a question and being shown one.
+        "rendered_front": (
+            render_cloze(row["front"]) if row["note_type"] == "cloze" else row["front"]
+        ),
         "back": row["back"],
         "note_type": row["note_type"],
         "deck_path": row["deck_path"],
