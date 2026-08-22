@@ -55,9 +55,12 @@ function SignIn({ onSignedIn }) {
 
 // --- upload --------------------------------------------------------------
 
-function Upload({ onStarted }) {
+function Upload({ decks, onStarted }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // "" means start a new deck. Named explicitly rather than defaulting to the
+  // most recent one: adding a lecture to the wrong deck is expensive to undo.
+  const [deckId, setDeckId] = useState("");
 
   const send = async (file) => {
     setBusy(true);
@@ -65,9 +68,11 @@ function Upload({ onStarted }) {
     try {
       const body = new FormData();
       body.append("file", file);
+      if (deckId) body.append("deck_id", deckId);
       const response = await fetch("/api/jobs", { method: "POST", body });
-      if (!response.ok) throw new Error((await response.json()).detail);
-      onStarted((await response.json()).job_id);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || "upload failed");
+      onStarted(payload.job_id);
     } catch (problem) {
       setError(problem.message);
     } finally {
@@ -82,6 +87,27 @@ function Upload({ onStarted }) {
         PDF, Word, PowerPoint, Excel, text or images. Scans are fine — they are read
         as images, not run through OCR.
       </p>
+
+      {decks.length > 0 && (
+        <label className="field">
+          <span>Add to</span>
+          <select value={deckId} onChange={(e) => setDeckId(e.target.value)}>
+            <option value="">a new deck</option>
+            {decks.map((deck) => (
+              <option key={deck.deck_id} value={deck.deck_id}>
+                {deck.name} ({deck.card_count} cards)
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {deckId && (
+        <p className="muted small">
+          Cards that improve on ones already in this deck will update them in place
+          rather than arriving alongside them.
+        </p>
+      )}
+
       <input
         type="file"
         disabled={busy}
@@ -90,6 +116,114 @@ function Upload({ onStarted }) {
       {busy && <p className="muted">Uploading…</p>}
       {error && <p className="error">{error}</p>}
     </div>
+  );
+}
+
+// --- home: what you already have (item 3) --------------------------------
+
+const STATE_LABEL = {
+  uploaded: "Not started",
+  planning: "Reading your material",
+  plan_ready: "Waiting for you",
+  generating: "Writing cards",
+  reviewing: "Ready to review",
+  complete: "Ready to review",
+  interrupted: "Interrupted — reopen to resume",
+  failed: "Failed",
+};
+
+function Home({ decks, jobs, onOpen, onStarted, onRenamed }) {
+  const unfinished = jobs.filter((job) => !["complete", "reviewing"].includes(job.state));
+
+  return (
+    <>
+      <Upload decks={decks} onStarted={onStarted} />
+
+      {jobs.length > 0 && (
+        <div className="panel narrow">
+          <h2>Your runs</h2>
+          {unfinished.length > 0 && (
+            <p className="muted small">
+              {unfinished.length} still going or waiting on you. They keep running with
+              this tab closed.
+            </p>
+          )}
+          <ul className="rows">
+            {jobs.map((job) => (
+              <li key={job.job_id}>
+                <button className="row" onClick={() => onOpen(job.job_id)}>
+                  <span className="row-main">{job.source_filename || "upload"}</span>
+                  <span className="muted small">
+                    {job.deck_name} · {STATE_LABEL[job.state] || job.state}
+                    {job.card_count > 0 && ` · ${job.card_count} cards`}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {decks.length > 0 && (
+        <div className="panel narrow">
+          <h2>Your decks</h2>
+          <ul className="rows">
+            {decks.map((deck) => (
+              <DeckRow key={deck.deck_id} deck={deck} onRenamed={onRenamed} />
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
+  );
+}
+
+function DeckRow({ deck, onRenamed }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(deck.name);
+
+  const save = async () => {
+    try {
+      await api(`/api/decks/${deck.deck_id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      });
+      setEditing(false);
+      onRenamed();
+    } catch {
+      setName(deck.name);
+      setEditing(false);
+    }
+  };
+
+  return (
+    <li>
+      <div className="row static">
+        {editing ? (
+          <input
+            className="row-main"
+            value={name}
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+            onBlur={save}
+            onKeyDown={(e) => e.key === "Enter" && save()}
+          />
+        ) : (
+          <span className="row-main">{deck.name}</span>
+        )}
+        <span className="muted small">
+          {deck.card_count} cards · {deck.job_count} run{deck.job_count === 1 ? "" : "s"}
+          {deck.last_exported_at
+            ? ` · downloaded ${new Date(deck.last_exported_at * 1000).toLocaleDateString()}`
+            : " · never downloaded"}
+        </span>
+        {!editing && (
+          <button className="ghost" onClick={() => setEditing(true)}>
+            Rename
+          </button>
+        )}
+      </div>
+    </li>
   );
 }
 
@@ -228,13 +362,21 @@ function PlanEditor({ jobId, plan, onApproved }) {
 
 // --- the card checkpoint -------------------------------------------------
 
-function CardReview({ jobId }) {
+function CardReview({ jobId, onDone }) {
   const [cards, setCards] = useState([]);
+  const [progress, setProgress] = useState({ total: 0, reviewed_count: 0 });
   const [info, setInfo] = useState(null);
   const [busy, setBusy] = useState(null);
+  // Cards ticked for a bulk action. A Set, because 164 cards is enough that a
+  // per-card boolean re-render is visible.
+  const [picked, setPicked] = useState(() => new Set());
+  const [confirming, setConfirming] = useState(false);
 
   const refresh = useCallback(async () => {
-    setCards((await api(`/api/jobs/${jobId}/cards`)).cards);
+    const body = await api(`/api/jobs/${jobId}/cards`);
+    setCards(body.cards);
+    setProgress({ total: body.total, reviewed_count: body.reviewed_count });
+    setPicked(new Set());
   }, [jobId]);
 
   useEffect(() => {
@@ -252,10 +394,29 @@ function CardReview({ jobId }) {
     }
   };
 
+  const toggle = (uuid) =>
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(uuid)) next.delete(uuid);
+      else next.add(uuid);
+      return next;
+    });
+
+  const bulk = (verb) =>
+    act(`bulk-${verb}`, `/api/jobs/${jobId}/cards/${verb}`, {
+      method: "POST",
+      body: JSON.stringify({ card_uuids: [...picked] }),
+    });
+
   const byTopic = cards.reduce((groups, card) => {
     (groups[card.deck_path] ||= []).push(card);
     return groups;
   }, {});
+
+  if (confirming)
+    return (
+      <DownloadStep jobId={jobId} info={info} onBack={() => setConfirming(false)} />
+    );
 
   return (
     <div className="panel">
@@ -265,12 +426,61 @@ function CardReview({ jobId }) {
         it gets drilled for weeks before you notice.
       </p>
 
+      {progress.total > 0 && (
+        <div className="progress">
+          <div
+            className="bar"
+            style={{ width: `${(progress.reviewed_count / progress.total) * 100}%` }}
+          />
+          <span className="muted small">
+            {progress.reviewed_count} of {progress.total} read
+          </span>
+        </div>
+      )}
+
+      {/* Sticky, because the selection is made by scrolling and a bar that
+          scrolls away turns a bulk action back into per-card clicking. */}
+      <div className={`bulkbar ${picked.size ? "active" : ""}`}>
+        <label>
+          <input
+            type="checkbox"
+            checked={picked.size > 0 && picked.size === cards.length}
+            onChange={(e) =>
+              setPicked(e.target.checked ? new Set(cards.map((c) => c.card_uuid)) : new Set())
+            }
+          />
+          {picked.size ? `${picked.size} selected` : "Select all"}
+        </label>
+        <button disabled={!picked.size || busy} onClick={() => bulk("accept")}>
+          {busy === "bulk-accept" ? "Marking…" : "Keep selected"}
+        </button>
+        <button
+          className="ghost danger"
+          disabled={!picked.size || busy}
+          onClick={() => bulk("reject")}
+        >
+          {busy === "bulk-reject" ? "Rejecting…" : "Reject selected"}
+        </button>
+      </div>
+
       {Object.entries(byTopic).map(([path, group]) => (
         <section key={path}>
           <h3>
             {path}
             <button
               className="ghost"
+              onClick={() =>
+                setPicked((current) => {
+                  const next = new Set(current);
+                  group.forEach((card) => next.add(card.card_uuid));
+                  return next;
+                })
+              }
+            >
+              Select all {group.length}
+            </button>
+            <button
+              className="ghost danger"
               onClick={() =>
                 act(path, `/api/jobs/${jobId}/topics/${group[0].topic_id}/cards`, {
                   method: "DELETE",
@@ -285,6 +495,8 @@ function CardReview({ jobId }) {
               key={card.card_uuid}
               card={card}
               busy={busy === card.card_uuid}
+              picked={picked.has(card.card_uuid)}
+              onPick={() => toggle(card.card_uuid)}
               onSave={(front, back) =>
                 act(card.card_uuid, `/api/cards/${card.card_uuid}`, {
                   method: "PATCH",
@@ -304,23 +516,136 @@ function CardReview({ jobId }) {
         </section>
       ))}
 
-      {cards.length > 0 && info && (
+      {cards.length > 0 && (
         <div className="download">
-          <a href={`/api/jobs/${jobId}/deck.apkg`} download>
+          <button onClick={() => setConfirming(true)}>
             Download {cards.length} cards
-          </a>
-          <p className="muted small">{info.import_advice}</p>
-          <p className="muted small">
-            To undo this batch later, search <code>{info.anki_search}</code> in Anki&apos;s
-            Browse screen.
-          </p>
+          </button>
         </div>
+      )}
+      {onDone && (
+        <button className="ghost" onClick={onDone}>
+          Back to your runs
+        </button>
       )}
     </div>
   );
 }
 
-function Card({ card, busy, onSave, onReject, onReroll }) {
+// --- what downloading would actually do (item 5) -------------------------
+
+function DownloadStep({ jobId, info, onBack }) {
+  const [diff, setDiff] = useState(null);
+  const [error, setError] = useState(null);
+  // Updates the user has chosen NOT to take. Opt-out rather than opt-in: the
+  // generated card is the one they just reviewed, so taking it is the default.
+  const [skipped, setSkipped] = useState(() => new Set());
+
+  useEffect(() => {
+    api(`/api/jobs/${jobId}/diff`)
+      .then(setDiff)
+      .catch((problem) => setError(problem.message));
+  }, [jobId]);
+
+  if (error)
+    return (
+      <div className="panel">
+        <h2>Download</h2>
+        <p className="muted">
+          This job has no earlier deck to compare against, so everything in it is new.
+        </p>
+        <a className="primary" href={`/api/jobs/${jobId}/deck.apkg`} download>
+          Download the deck
+        </a>
+        <button className="ghost" onClick={onBack}>
+          Back to the cards
+        </button>
+      </div>
+    );
+
+  if (!diff) return <div className="panel narrow muted">Working out what changes…</div>;
+
+  const query = [...skipped].map((uuid) => `skip=${encodeURIComponent(uuid)}`).join("&");
+  const href = `/api/jobs/${jobId}/deck.apkg${query ? `?${query}` : ""}`;
+  const taking = diff.counts.update - skipped.size;
+
+  return (
+    <div className="panel">
+      <h2>What this will do to your collection</h2>
+
+      <div className="estimate">
+        <strong>{diff.counts.add}</strong> new
+        {" · "}
+        <strong>{taking}</strong> updated
+        {" · "}
+        <strong>{diff.counts.unchanged}</strong> left alone
+        {skipped.size > 0 && <span className="muted"> ({skipped.size} update skipped)</span>}
+      </div>
+
+      <p className="muted small">
+        Cards that have not changed are left out of the file entirely, so your own
+        edits, tags and scheduling on them survive untouched.
+      </p>
+
+      {diff.updates.length > 0 && (
+        <>
+          <h3>Updates — untick any you would rather keep as they are</h3>
+          {diff.updates.map((update) => (
+            <div key={update.card_uuid} className="card diff">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={!skipped.has(update.card_uuid)}
+                  onChange={() =>
+                    setSkipped((current) => {
+                      const next = new Set(current);
+                      if (next.has(update.card_uuid)) next.delete(update.card_uuid);
+                      else next.add(update.card_uuid);
+                      return next;
+                    })
+                  }
+                />
+                Take this update
+              </label>
+              <div className="was">
+                <span className="label muted small">In your collection</span>
+                <div>{update.existing_front}</div>
+                <div className="muted">{update.existing_back}</div>
+              </div>
+              <div className="now">
+                <span className="label muted small">Replacing it with</span>
+                <div>{update.proposed_front}</div>
+                <div className="muted">{update.proposed_back}</div>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
+      {diff.warning && <p className="muted small">{diff.warning}</p>}
+
+      <div className="download">
+        <a className="primary" href={href} download>
+          Download the deck
+        </a>
+        {info && (
+          <>
+            <p className="muted small">{info.import_advice}</p>
+            <p className="muted small">
+              To undo this batch later, search <code>{info.anki_search}</code> in
+              Anki&apos;s Browse screen.
+            </p>
+          </>
+        )}
+      </div>
+      <button className="ghost" onClick={onBack}>
+        Back to the cards
+      </button>
+    </div>
+  );
+}
+
+function Card({ card, busy, picked, onPick, onSave, onReject, onReroll }) {
   const [editing, setEditing] = useState(false);
   const [front, setFront] = useState(card.front);
   const [back, setBack] = useState(card.back);
@@ -348,7 +673,16 @@ function Card({ card, busy, onSave, onReject, onReroll }) {
   }
 
   return (
-    <div className="card">
+    <div className={`card ${picked ? "picked" : ""} ${card.reviewed ? "read" : ""}`}>
+      {onPick && (
+        <input
+          type="checkbox"
+          className="pick"
+          checked={!!picked}
+          onChange={onPick}
+          aria-label="select this card"
+        />
+      )}
       {/* Rendered, not raw: judging a cloze card from its markup is judging the
           wrong thing. */}
       <div className="front">{card.rendered_front}</div>
@@ -387,9 +721,35 @@ export default function App() {
   );
   const [job, setJob] = useState(null);
   const [error, setError] = useState(null);
+  // What this person already has. Loaded once past the door and refreshed
+  // whenever they come back to it: the home screen is the only handle on a run
+  // once its tab is gone.
+  const [home, setHome] = useState(null);
   // Which jobs we have already asked to plan. Without this the poll below
   // fires the planning pass again every two seconds — an expensive loop.
   const planning = useRef(new Set());
+
+  const loadHome = useCallback(async () => {
+    try {
+      const [decks, jobs] = await Promise.all([api("/api/decks"), api("/api/jobs")]);
+      setHome({ decks: decks.decks, jobs: jobs.jobs });
+    } catch {
+      // Not signed in yet, which the door below handles.
+      setHome(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) loadHome();
+  }, [jobId, person, loadHome]);
+
+  const goHome = useCallback(() => {
+    setError(null);
+    setJob(null);
+    setJobId(null);
+    history.replaceState(null, "", "/");
+    loadHome();
+  }, [loadHome]);
 
   // Polled rather than streamed here for simplicity; the SSE endpoint carries
   // the same state and is what a longer run should watch.
@@ -401,18 +761,16 @@ export default function App() {
         .catch((problem) => {
           // A job that no longer exists — a stale link, or one cleared after a
           // failure. Swallowing this leaves the app polling a ghost and showing
-          // "Loading…" forever, so it goes back to the upload screen instead.
+          // "Loading…" forever, so it goes back to the home screen instead.
           if (String(problem.message).includes("job not found")) {
             planning.current.delete(jobId);
-            setJob(null);
-            setJobId(null);
-            history.replaceState(null, "", "/");
+            goHome();
           }
         });
     tick();
     const timer = setInterval(tick, 2000);
     return () => clearInterval(timer);
-  }, [jobId]);
+  }, [jobId, goHome]);
 
   // An uploaded job sits there until something starts it. The upload and the
   // planning pass are separate calls on purpose — the upload has to be durable
@@ -429,8 +787,27 @@ export default function App() {
     if (jobId) history.replaceState(null, "", `?job=${jobId}`);
   }, [jobId]);
 
-  if (!person && !jobId) return <SignIn onSignedIn={setPerson} />;
-  if (!jobId) return <Upload onStarted={setJobId} />;
+  if (!person && !jobId && !home)
+    return (
+      <SignIn
+        onSignedIn={(who) => {
+          setPerson(who);
+          loadHome();
+        }}
+      />
+    );
+
+  if (!jobId)
+    return (
+      <Home
+        decks={home?.decks || []}
+        jobs={home?.jobs || []}
+        onOpen={setJobId}
+        onStarted={setJobId}
+        onRenamed={loadHome}
+      />
+    );
+
   if (!job) return <div className="panel narrow muted">Loading…</div>;
 
   if (job.state === "failed" || error)
@@ -438,23 +815,15 @@ export default function App() {
       <div className="panel narrow">
         <h2>That did not work</h2>
         <p className="error">{job.error || error}</p>
-        <button
-          onClick={() => {
-            setError(null);
-            setJob(null);
-            setJobId(null);
-            history.replaceState(null, "", "/");
-          }}
-        >
-          Start again
-        </button>
+        <button onClick={goHome}>Back to your runs</button>
       </div>
     );
 
   if (job.plan && ["plan_ready", "uploaded"].includes(job.state))
     return <PlanEditor jobId={jobId} plan={job.plan} onApproved={() => setJob(null)} />;
 
-  if (["complete", "reviewing"].includes(job.state)) return <CardReview jobId={jobId} />;
+  if (["complete", "reviewing"].includes(job.state))
+    return <CardReview jobId={jobId} onDone={goHome} />;
 
   return (
     <div className="panel narrow">
@@ -464,11 +833,15 @@ export default function App() {
           ? "Starting…"
           : job.state === "planning"
             ? "Reading your material. This takes about twenty seconds."
-            : "Writing cards, about ten seconds per topic."}
+            : "Writing cards. Topics run five at a time, so this is about a minute."}
       </p>
       <p className="muted small">
-        You can close this tab. The link keeps working.
+        You can close this tab — it keeps running, and it will be waiting under
+        &ldquo;your runs&rdquo; when you come back.
       </p>
+      <button className="ghost" onClick={goHome}>
+        Back to your runs
+      </button>
     </div>
   );
 }
