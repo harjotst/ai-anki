@@ -45,6 +45,39 @@ export function signOut() {
 }
 
 /**
+ * The sign-in methods already attached to this account.
+ *
+ * Somebody who signed in with Google and later with Apple would arrive as two
+ * accounts unless the two are attached deliberately, because Apple's "Hide My
+ * Email" hands over a private relay address rather than the one Google knows.
+ * Automatic matching is on verified email, and those two addresses are not the
+ * same address.
+ */
+export async function identities() {
+  const { data, error } = await supabase.auth.getUserIdentities();
+  if (error) throw new Error(error.message);
+  return data?.identities ?? [];
+}
+
+/** Attach another sign-in method to the account already signed in. */
+export async function linkIdentity(provider) {
+  const { error } = await supabase.auth.linkIdentity({
+    provider,
+    options: { redirectTo: window.location.origin },
+  });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Detach one. Refused when it is the last one, because an account with no way
+ * to sign into it is an account nobody can reach — including its owner.
+ */
+export async function unlinkIdentity(identity) {
+  const { error } = await supabase.auth.unlinkIdentity(identity);
+  if (error) throw new Error(error.message);
+}
+
+/**
  * Every call to our own API, carrying the current token.
  *
  * The token goes in a header rather than a cookie deliberately: another site's

@@ -151,3 +151,53 @@ def test_one_persons_job_is_not_visible_to_another_person(boot):
         assert machine.get(f"/api/jobs/{mine}/usage").status_code == 404
         assert machine.get(f"/api/jobs/{mine}/diff").status_code == 404
         assert machine.post(f"/api/jobs/{mine}/cards/reject", json={"card_uuids": []}).status_code == 404
+
+
+# --- one person, however they signed in ----------------------------------
+
+
+def test_the_account_follows_the_subject_not_the_email(client, pg_dsn):
+    """The invariant that makes linking work at all.
+
+    When somebody attaches a second sign-in method, the auth provider keeps one
+    user and adds an identity to it — the subject claim does not change. So the
+    account is keyed on `sub` and nothing else. Keying on email instead would
+    mint a second account the moment anybody changed their address, or the
+    moment Apple handed over a private relay one.
+    """
+    from app import db
+
+    client.sign_in_as(TESTER, email="first@example.com")
+    assert client.get("/api/jobs").status_code == 200
+
+    # The same person, a different address: changed it, or signed in with Apple
+    # and let it hide the real one.
+    client.sign_in_as(TESTER, email="xyz@privaterelay.appleid.com")
+    assert client.get("/api/jobs").status_code == 200
+
+    conn = db.connect(pg_dsn)
+    try:
+        rows = conn.execute("SELECT id, email FROM account").fetchall()
+    finally:
+        conn.close()
+    assert len(rows) == 1, "a changed email must not mint a second account"
+    assert str(rows[0]["id"]) == TESTER
+
+
+def test_two_subjects_are_two_people_however_alike_they_look(client, pg_dsn):
+    """The other half of it. Same email, different subject, is two accounts —
+    which is exactly what happens when somebody signs in with Apple instead of
+    Google without linking, and why the linking screen exists."""
+    from app import db
+
+    client.sign_in_as(TESTER, email="same@example.com")
+    client.get("/api/jobs")
+    client.sign_in_as(SOMEBODY_ELSE, email="same@example.com")
+    client.get("/api/jobs")
+
+    conn = db.connect(pg_dsn)
+    try:
+        count = conn.execute("SELECT COUNT(*) AS n FROM account").fetchone()["n"]
+    finally:
+        conn.close()
+    assert count == 2

@@ -32,8 +32,10 @@ SQLite, and that coupling is the thing to fix.
 ## Success criteria
 
 1. A person signs in with Google on the web app and reaches their own decks.
-2. A person signs in with Apple, having previously used Google with the same email, and
-   arrives at the **same** account rather than a second one.
+2. A person who has connected Apple to their account on the "How you sign in" screen
+   reaches the **same** account with either method. Without connecting it they get a
+   second account, which is Apple's private-relay design rather than a defect, and the
+   screen exists so that is a choice rather than a surprise.
 3. All existing tests pass against real Postgres, with no test knowing that Postgres is
    what it is talking to.
 4. `x-owner-token` no longer exists anywhere in the codebase.
@@ -64,11 +66,26 @@ An `account` row is created lazily on first authenticated request rather than by
 database trigger on `auth.users`. A trigger would put application logic in a place the
 test suite cannot easily reach and the migration tooling does not own.
 
-**Account linking** is handled by Supabase, which links identities sharing a verified
-email. This must be verified against a real project rather than assumed — sign in with
-Google, sign out, sign in with Apple using the same address, and assert one `account`
-row. Success criterion 2 exists because getting this wrong silently creates duplicate
-people, and it is discovered months later when somebody's decks vanish.
+**Account linking**, revised on 2026-08-22 after looking at what Apple actually does.
+
+Automatic linking matches a *verified email*, and Apple's "Hide My Email" hands over
+`something@privaterelay.appleid.com` rather than the address Google knows. Those are not
+the same address, so automatic linking does not happen — the person arrives as a second
+account with none of their decks in it, and concludes the application lost them.
+
+That is Apple's design rather than a defect to fix, so the application stops relying on
+automatic matching. A "How you sign in" screen attaches a second method deliberately,
+through Supabase's identity linking, and the last method cannot be detached: an account
+with no way to sign into it is an account nobody can reach, including its owner.
+
+The server-side invariant this rests on is that an account is keyed on the `sub` claim
+and nothing else, because linking adds an identity to an existing user without changing
+its id. Two tests hold that down: a changed email must not mint a second account, and
+the same email under a different subject must remain two people.
+
+Success criterion 2 is therefore restated: signing in with Apple after Google produces a
+*second* account unless the two were deliberately linked, and the application makes that
+possible and obvious rather than pretending it cannot happen.
 
 ### Authentication in FastAPI
 

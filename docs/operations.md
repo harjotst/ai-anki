@@ -198,6 +198,41 @@ provider on every request.
 fly secrets set AI_ANKI_JWT_ISSUER=https://<project>.supabase.co/auth/v1
 ```
 
+### Turning the providers on
+
+In Google Cloud — APIs & Services → OAuth consent screen, then Credentials → OAuth
+client ID → **Web application**. The one field that has to be exact:
+
+```
+https://<project>.supabase.co/auth/v1/callback
+```
+
+Paste the client id and secret into Supabase → Authentication → Providers → Google.
+
+Two settings there, and both answers follow from how this application works:
+
+- **Skip nonce checks: off.** The nonce is what stops a stolen id token being replayed.
+  It only needs skipping when a native SDK cannot send one, and web OAuth always can.
+- **Allow users without an email: off.** An account is keyed on the subject claim, but
+  the *display* name and every "who is this" surface falls back to the email. More
+  importantly, somebody with no address has no way to be found or recognised.
+
+Supabase → Authentication → URL Configuration also needs every origin the application is
+served from in the redirect allow list, including `http://localhost:8080` for local work.
+A missing entry fails at the end of the round trip, after the person has already signed
+in, which reads as the application being broken rather than misconfigured.
+
+### Two sign-in methods, one account
+
+Automatic account linking matches a **verified email**. Apple's "Hide My Email" hands
+over a private relay address instead of the real one, so somebody who used Google first
+and Apple second arrives as a *second account* with none of their decks in it.
+
+That is Apple's design rather than something to fix, so the application does not rely on
+automatic matching: the "How you sign in" screen attaches a second method deliberately.
+The last remaining method cannot be detached, because an account with no way to sign into
+it is an account nobody can reach.
+
 ## Deploying
 
 One machine, one volume, one region. Two machines would be two different
