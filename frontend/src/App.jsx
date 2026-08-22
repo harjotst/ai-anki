@@ -380,18 +380,41 @@ function PlanEditor({ jobId, plan, onApproved }) {
 
 // --- learning it, before drilling it -------------------------------------
 
-function Lessons({ jobId, onReview }) {
+function Lessons({ jobId, onReview, stillWriting, expected }) {
   const [lessons, setLessons] = useState(null);
   const [open, setOpen] = useState(0);
 
+  // Polled while the run is still going, because a lesson is readable the
+  // moment it is committed. Waiting for the whole job would mean ten minutes of
+  // a blank screen on a twenty-four topic document — lessons are the slowest
+  // thing a run produces, at roughly ten times the output tokens of a card set.
   useEffect(() => {
-    api(`/api/jobs/${jobId}/lessons`)
-      .then((body) => setLessons(body.lessons))
-      .catch(() => setLessons([]));
-  }, [jobId]);
+    const tick = () =>
+      api(`/api/jobs/${jobId}/lessons`)
+        .then((body) => setLessons(body.lessons))
+        .catch(() => setLessons([]));
+    tick();
+    if (!stillWriting) return undefined;
+    const timer = setInterval(tick, 3000);
+    return () => clearInterval(timer);
+  }, [jobId, stillWriting]);
 
   if (!lessons) return <div className="panel narrow muted">Loading…</div>;
-  if (!lessons.length) return <CardReview jobId={jobId} onDone={onReview} />;
+  if (!lessons.length)
+    return stillWriting ? (
+      <div className="panel narrow">
+        <h2>Reading your material</h2>
+        <p className="muted">
+          The first topic is being written now. You can start reading as soon as it
+          lands — you do not have to wait for the rest.
+        </p>
+        <p className="muted small">
+          About a minute a topic. You can close this tab; it keeps going.
+        </p>
+      </div>
+    ) : (
+      <CardReview jobId={jobId} onDone={onReview} />
+    );
 
   const lesson = lessons[open];
 
@@ -414,6 +437,11 @@ function Lessons({ jobId, onReview }) {
             {entry.deck_path.split("::").pop()}
           </button>
         ))}
+        {stillWriting && (
+          <span className="topic pending" aria-live="polite">
+            writing {expected ? `${lessons.length} of ${expected}` : "more"}…
+          </span>
+        )}
       </nav>
 
       <article className="lesson">
@@ -482,12 +510,16 @@ function Lessons({ jobId, onReview }) {
           <button onClick={() => setOpen(open + 1)}>
             Next: {lessons[open + 1].deck_path.split("::").pop()}
           </button>
+        ) : stillWriting ? (
+          <button disabled>Writing the next one…</button>
         ) : (
           <button onClick={onReview}>Review the cards</button>
         )}
-        <button className="ghost" onClick={onReview}>
-          Skip to the cards
-        </button>
+        {!stillWriting && (
+          <button className="ghost" onClick={onReview}>
+            Skip to the cards
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1000,11 +1032,19 @@ export default function App() {
   if (job.plan && ["plan_ready", "uploaded"].includes(job.state))
     return <PlanEditor jobId={jobId} plan={job.plan} onApproved={() => setJob(null)} />;
 
-  if (["complete", "reviewing"].includes(job.state))
+  // Generating is not a state to be shown a spinner for. The first lesson is
+  // readable long before the last card is written, so the reader opens now and
+  // fills in behind the person using it.
+  if (["complete", "reviewing", "generating"].includes(job.state))
     return reviewing ? (
       <CardReview jobId={jobId} onDone={goHome} />
     ) : (
-      <Lessons jobId={jobId} onReview={() => setReviewing(true)} />
+      <Lessons
+        jobId={jobId}
+        onReview={() => setReviewing(true)}
+        stillWriting={job.state === "generating"}
+        expected={job.plan?.topics?.length}
+      />
     );
 
   return (

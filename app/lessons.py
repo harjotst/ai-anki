@@ -19,7 +19,48 @@ which is why each needs its own pacesetter call before the rest fan out.
 
 from __future__ import annotations
 
+import re
+
 from app.planning import SYSTEM
+
+# `\uXXXX`, and the whitespace escapes, left as literal characters in a string
+# that has already been through a JSON decoder.
+_ESCAPED_CODEPOINT = re.compile(r"\\u([0-9a-fA-F]{4})")
+_ESCAPED_NEWLINE = re.compile(r"\\r\\n|\\n|\\r")
+
+
+def readable(text: str) -> str:
+    """Decode escape sequences the model escaped a second time.
+
+    Seen on a real run: `\u2014` and `\r\n` printed on screen as text. In
+    JSON an em dash may be written literally or as a `\u2014` escape, and the
+    decoder resolves the latter -- so for one to survive into the string, the
+    model must have escaped the backslash too. It is writing JSON about JSON.
+
+    Asking it not to in the prompt would help and would not be reliable, and
+    this has to be reliable.
+
+    The honest cost: a lesson that genuinely discusses escape sequences -- a
+    programming course, say -- has its examples decoded and mangled. That is a
+    real case for this product and it is accepted here, because the alternative
+    is a stray `\u2014` on the page of every lesson that wanted a dash, which
+    is every lesson.
+    """
+    if not text:
+        return text
+    text = _ESCAPED_NEWLINE.sub("\n", text)
+    return _ESCAPED_CODEPOINT.sub(lambda m: chr(int(m.group(1), 16)), text)
+
+
+def clean(value):
+    """Walk a decoded lesson and make every string in it readable."""
+    if isinstance(value, str):
+        return readable(value)
+    if isinstance(value, list):
+        return [clean(item) for item in value]
+    if isinstance(value, dict):
+        return {key: clean(item) for key, item in value.items()}
+    return value
 
 LESSON_SCHEMA = {
     "type": "object",

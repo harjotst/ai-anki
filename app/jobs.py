@@ -746,6 +746,19 @@ def save_lesson(
         "     created_at = EXCLUDED.created_at",
         (job_id, topic["topic_id"], topic["path"], json.dumps(lesson), db.now()),
     )
+    # Announced as well as stored. A lesson is the slowest thing a job
+    # produces, and it is readable the moment it lands rather than when the
+    # whole run finishes -- so a client that is watching should be told.
+    record_event(
+        conn,
+        job_id,
+        "lesson",
+        {
+            "topic_id": topic["topic_id"],
+            "path": topic["path"],
+            "in_one_line": lesson.get("in_one_line", ""),
+        },
+    )
 
 
 def load_lesson(conn: psycopg.Connection, job_id: str, topic_id: str) -> dict | None:

@@ -143,6 +143,7 @@ class ClaudeScript:
         # its wall-clock, which would be flaky.
         self._by_kind: dict = {}
         self._kind_usage: dict | None = None
+        self._kind_pause: dict = {}
         self._in_flight = 0
         self.peak_in_flight = 0
         self.overlapped_with_first = False
@@ -186,7 +187,7 @@ class ClaudeScript:
     def replies_json(self, payload: dict, **kwargs):
         return self.replies(json.dumps(payload), **kwargs)
 
-    def answers(self, *, usage: dict | None = None, **by_kind):
+    def answers(self, *, usage: dict | None = None, pause: dict | None = None, **by_kind):
         """Answer according to what was asked, rather than in call order.
 
         The queue is FIFO, which is exactly right while calls are sequential and
@@ -201,10 +202,13 @@ class ClaudeScript:
 
         Pass `usage=` to give every answer the same reported token usage,
         which is how a test says "these calls read the cache" without caring
-        which call was which.
+        which call was which. Pass `pause={"cards": 1.0}` to hold calls of one
+        kind open, the way a real one runs for a while, so a test can look at
+        what the job has already committed while the rest is still in flight.
         """
         self._by_kind = dict(by_kind)
         self._kind_usage = usage
+        self._kind_pause = pause or {}
         return self
 
     def calls_for(self, kind: str) -> list[dict]:
@@ -322,9 +326,10 @@ class ClaudeScript:
             return httpx.Response(200, json=self._as_message(STOCK_LESSON))
         if kind in self._by_kind:
             answer = self._by_kind[kind]
-            body, pause = self._as_message(
+            body = self._as_message(
                 answer(request) if callable(answer) else answer, self._kind_usage
-            ), 0.0
+            )
+            pause = self._kind_pause.get(kind, 0.0)
         elif not self._queued:
             raise AssertionError(
                 f"Claude was called {len(self.requests)} time(s) but only "

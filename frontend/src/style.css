@@ -137,3 +137,5 @@ button.primary { padding: .6rem 1.2rem; margin-right: .75rem; margin-bottom: .75
 .misconception .belief { font-weight: 560; margin-bottom: .35rem; }
 .checks { margin: 0; padding-left: 1.2rem; }
 .checks li { margin-bottom: .5rem; }
+.topic.pending { border-style: dashed; color: var(--muted); cursor: default;
+                 background: transparent; }
