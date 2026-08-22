@@ -1,17 +1,18 @@
 // Deck detail: everything the audit found homeless — rename, sharing, the
 // card browser, per-topic mastery, run history — lives here now. The .apkg
-// export stays web-only: a download has nowhere to land on the phone.
-import { useLocalSearchParams, useRouter } from "expo-router";
+// export lands in the cache and leaves through the share sheet: the native
+// stand-in for the web's browser download.
+import * as FileSystem from "expo-file-system/legacy";
+import { type Href, useLocalSearchParams, useRouter } from "expo-router";
+import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, TextInput, View, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { cached, dropCache } from "../../lib/data";
-import { api } from "../../lib/session";
-import { radius, space, target, usePalette } from "../../theme";
-import { Button, Cap, ErrorCard, Icon, IconBtn, Pill, Seg, Sheet, Skeleton, T, useToast } from "../../ui";
-import { EditSheet } from "../study/[deckId]";
-
-const JOB_TOAST = "Finish this on the web for now — job screens land on mobile next.";
+import { cached, dropCache } from "../../../lib/data";
+import { api, authHeaders, BASE } from "../../../lib/session";
+import { radius, space, target, usePalette } from "../../../theme";
+import { Button, Cap, ErrorCard, Icon, IconBtn, Pill, Seg, Sheet, Skeleton, T, useToast } from "../../../ui";
+import { EditSheet } from "../../study/[deckId]";
 
 export default function DeckDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -31,6 +32,7 @@ export default function DeckDetail() {
   const [editing, setEditing] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [studyBusy, setStudyBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -103,6 +105,29 @@ export default function DeckDetail() {
     }
   };
 
+  const exportDeck = async () => {
+    if (!latestCompleteJob) {
+      toast("Nothing generated to export yet");
+      return;
+    }
+    const name = deck.name.replace(/[^\w\- ]+/g, "").trim() || "deck";
+    setExportBusy(true);
+    try {
+      const result = await FileSystem.downloadAsync(
+        `${BASE}/api/jobs/${latestCompleteJob.job_id}/deck.apkg`,
+        `${FileSystem.cacheDirectory}${name}.apkg`,
+        { headers: (await authHeaders()) as Record<string, string> },
+      );
+      // downloadAsync saves error bodies instead of throwing; check the status.
+      if (result.status !== 200) throw new Error(`export failed (${result.status})`);
+      await Sharing.shareAsync(result.uri);
+    } catch (problem: any) {
+      toast(problem.message);
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
@@ -135,11 +160,16 @@ export default function DeckDetail() {
           disabled={studyBusy}
         />
 
+        {/* Three-up like the web; the tighter padding stands in for the
+            web's smaller font on this row. */}
         <View style={{ flexDirection: "row", gap: space[2] }}>
-          <Button title="Add lecture" kind="ghost" style={{ flex: 1 }}
-            disabled={deck.shared_with_me} onPress={() => toast(JOB_TOAST)} />
-          <Button title="Share" kind="ghost" style={{ flex: 1 }}
+          <Button title="Add lecture" kind="ghost" style={{ flex: 1, paddingHorizontal: space[1] }}
+            disabled={deck.shared_with_me} onPress={() => router.push(`/job/new?deck=${id}` as Href)} />
+          <Button title="Share" kind="ghost" style={{ flex: 1, paddingHorizontal: space[1] }}
             disabled={deck.shared_with_me} onPress={() => setMenu("share")} />
+          <Button title={exportBusy ? "Exporting…" : "Export .apkg"} kind="ghost"
+            style={{ flex: 1, paddingHorizontal: space[1] }}
+            disabled={exportBusy} onPress={exportDeck} />
         </View>
 
         <Seg
@@ -159,7 +189,9 @@ export default function DeckDetail() {
               const pct = Math.round(topic.mastery * 100);
               return (
                 <Pressable key={topic.deck_path}
-                  onPress={() => { if (topicId && latestCompleteJob) toast(JOB_TOAST); }}
+                  onPress={() => {
+                    if (topicId && latestCompleteJob) router.push(`/deck/${id}/topic/${topicId}`);
+                  }}
                   style={({ pressed }) => navrow(pressed)}>
                   <View style={{ flex: 1, gap: 2 }}>
                     <T v="body" style={{ fontWeight: "600" }} numberOfLines={1}>
@@ -234,7 +266,7 @@ export default function DeckDetail() {
                   </Cap>
                 </View>
                 {["interrupted", "failed", "plan_ready", "generating", "planning"].includes(job.state) && (
-                  <Button kind="ghost" onPress={() => toast(JOB_TOAST)}
+                  <Button kind="ghost" onPress={() => router.push(`/job/${job.job_id}` as Href)}
                     title={job.state === "interrupted" ? "Resume" : job.state === "failed" ? "Retry" : "Open"} />
                 )}
               </View>

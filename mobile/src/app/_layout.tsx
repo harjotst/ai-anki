@@ -1,34 +1,28 @@
-// The root: theme, toasts, and the session gate. The gate is quiet in
-// development — the app signs itself in against the dev server's published
-// token — and becomes the real sign-in screen when native auth lands.
+// The root: theme, toasts, and the session gate. In development the gate
+// is quiet — the app signs itself in against the dev server's published
+// token; anywhere else it is the real sign-in screen.
 import { Stack } from "expo-router";
 import React, { useEffect, useState } from "react";
 import { StatusBar, View } from "react-native";
-import { loadSession } from "../lib/session";
+import { loadSession, SessionKind, subscribeSession } from "../lib/session";
+import SignIn from "../screens/sign-in";
 import { ThemeProvider, usePalette } from "../theme";
-import { Button, Screen, T, ToastHost } from "../ui";
+import { ToastHost } from "../ui";
 
 function Gate() {
   const palette = usePalette();
-  const [signedIn, setSignedIn] = useState<boolean | undefined>(undefined);
+  const [kind, setKind] = useState<SessionKind | undefined>(undefined);
 
-  const establish = () => loadSession().then(setSignedIn);
-  useEffect(() => { establish(); }, []);
+  useEffect(() => {
+    loadSession().then(setKind);
+    return subscribeSession(setKind);
+  }, []);
 
-  if (signedIn === undefined) {
+  if (kind === undefined) {
     return <View style={{ flex: 1, backgroundColor: palette.bg }} />;
   }
-  if (!signedIn) {
-    return (
-      <Screen style={{ justifyContent: "center", flexGrow: 1 }}>
-        <T v="display">ai-anki</T>
-        <T v="secondary">
-          Sign in to continue. This development build signs in automatically
-          when the local server is running.
-        </T>
-        <Button title="Try again" onPress={establish} />
-      </Screen>
-    );
+  if (kind === null) {
+    return <SignIn onSignedIn={() => loadSession().then(setKind)} />;
   }
   return (
     <Stack screenOptions={{ headerShown: false }}>
