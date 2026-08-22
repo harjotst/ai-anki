@@ -139,24 +139,27 @@ express a rename, a backfill or a rollback, all of which this work needs.
 
 ### The worker
 
-Postgres makes this simpler, and the simplification is the point rather than a bonus.
+**Corrected on 2026-08-21, during implementation.** The spec originally claimed
+`SELECT … FOR UPDATE SKIP LOCKED` would replace `worker_id` and delete around
+eighty lines. That was wrong on both counts and is recorded rather than quietly
+dropped.
 
-Job claiming becomes:
+`SKIP LOCKED` is for pulling work off a queue. This application has no queue:
+a job is started by an HTTP request and runs in that process. Nothing polls for
+work, so there is nothing for `SKIP LOCKED` to skip.
 
-```sql
-SELECT id FROM job
- WHERE state = 'generating' AND claimed_at < now() - interval '10 minutes'
- FOR UPDATE SKIP LOCKED
- LIMIT 1
-```
+What `worker_id` and `recover_orphans` actually solve is a different problem —
+"this job says it is generating, and no process is running it" — and they solve
+it correctly for one machine, which is what this spec deploys. The multi-machine
+answer is a lease with a heartbeat, where a job whose lease has expired is
+reclaimable. That is new machinery, it buys nothing until a second machine
+exists, and building it now would be exactly the speculative work this plan
+says to avoid.
 
-`worker_id`, `recover_orphans` and the boot-time reclaim exist because one SQLite writer
-could not express "claim this row, and let another process take it if I die". Postgres
-can. That is roughly eighty lines of bookkeeping deleted, and it stops assuming exactly
-one machine — which matters later, though this spec still deploys one.
+`recover_orphans` is also about thirty lines, not eighty.
 
-**The drain stays exactly as it is.** It is correct, it is well tested, and SIGTERM
-handling has nothing to do with the datastore.
+Left as it is. Revisit when there is genuinely a second machine, and build a
+lease then.
 
 ### Backups
 
