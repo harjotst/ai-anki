@@ -17,16 +17,13 @@ until a restore is needed, which is the worst moment to find out.
 
 from __future__ import annotations
 
-import gzip
 import logging
 import os
-import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-
-from app import db
 
 log = logging.getLogger("ai-anki.backup")
 
@@ -82,29 +79,39 @@ def build_client(destination: Destination, key_id: str | None = None, secret: st
     )
 
 
-def snapshot(db_path: Path, into: Path) -> Path:
-    """A consistent, compressed copy of the database.
+class DumpFailed(Exception):
+    """`pg_dump` did not produce an archive. Says what it said."""
 
-    `VACUUM INTO` takes its own read transaction, so the result is a coherent
-    point-in-time image rather than the torn file a plain copy of a WAL-mode
-    database would be. Compressed because SQLite pages are mostly empty space
-    and the wire is the expensive part.
+
+def snapshot(database_url: str, into: Path) -> Path:
+    """A consistent copy of the database, as a restorable archive.
+
+    `pg_dump` runs inside a single repeatable-read transaction, so the archive
+    is a coherent point-in-time image of the whole database rather than a set of
+    tables read at slightly different moments.
+
+    Not gzipped afterwards. The custom format compresses as it writes, and
+    gzipping a compressed archive costs CPU to add bytes. It is also the only
+    format `pg_restore` can restore selectively — which matters on the day
+    somebody needs one table back rather than all of them.
     """
     into.parent.mkdir(parents=True, exist_ok=True)
-    raw = into.with_suffix(into.suffix + ".raw")
-    db.backup_to(db_path, raw)
-    try:
-        with open(raw, "rb") as source, gzip.open(into, "wb") as target:
-            shutil.copyfileobj(source, target)
-    finally:
-        raw.unlink(missing_ok=True)
+    finished = subprocess.run(
+        ["pg_dump", "--format=custom", "--no-owner", "--no-acl", "--file", str(into),
+         database_url],
+        capture_output=True,
+        text=True,
+    )
+    if finished.returncode != 0:
+        into.unlink(missing_ok=True)
+        raise DumpFailed(finished.stderr.strip() or "pg_dump failed with no output")
     return into
 
 
 def key_for(prefix: str, now: float) -> str:
     """A key that sorts by date, so a listing reads as a history."""
     stamp = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    return f"{prefix}/{stamp}.db.gz" if prefix else f"{stamp}.db.gz"
+    return f"{prefix}/{stamp}.dump" if prefix else f"{stamp}.dump"
 
 
 def prune(client, destination: Destination, now: float, keep_days: int) -> list[str]:
@@ -130,7 +137,7 @@ def prune(client, destination: Destination, now: float, keep_days: int) -> list[
 
 
 def run(
-    db_path: Path,
+    database_url: str,
     work_dir: Path,
     destination: Destination,
     *,
@@ -144,7 +151,7 @@ def run(
     key = key_for(destination.prefix, now)
     local = work_dir / Path(key).name
 
-    written = snapshot(db_path, local)
+    written = snapshot(database_url, local)
     try:
         size = written.stat().st_size
         with open(written, "rb") as body:
@@ -166,7 +173,7 @@ def seconds_until_next_run(now: float, hour_utc: int = HOUR_UTC) -> float:
     return target.timestamp() - now
 
 
-async def nightly(db_path: Path, work_dir: Path, destination: Destination) -> None:
+async def nightly(database_url: str, work_dir: Path, destination: Destination) -> None:
     """Run a backup once a day, for ever, without taking the process down.
 
     Every failure is logged and slept off rather than raised. A backup task that
@@ -179,7 +186,7 @@ async def nightly(db_path: Path, work_dir: Path, destination: Destination) -> No
     while True:
         await asyncio.sleep(seconds_until_next_run(time.time()))
         try:
-            result = await asyncio.to_thread(run, db_path, work_dir, destination)
+            result = await asyncio.to_thread(run, database_url, work_dir, destination)
             log.info("backup uploaded %s (%d bytes), pruned %d",
                      result["key"], result["bytes"], len(result["pruned"]))
         except asyncio.CancelledError:

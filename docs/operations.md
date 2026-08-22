@@ -31,7 +31,7 @@ token count and nothing else.
 
 Per person and global, both computed from **recorded usage** rather than
 estimates — `api_call` rows carry what the API itself reported. Per-person
-attribution is what per-person Invite Tokens are for. Defaults: $25 per person
+attribution is what recording an account against every job is for. Defaults: $25 per person
 per day, $100 globally.
 
 The window rolls rather than resetting at midnight, so a spent budget frees up
@@ -63,7 +63,7 @@ Split by data class, deliberately:
   exist.
 
 ```bash
-curl -X POST -H "x-owner-token: $AI_ANKI_OWNER_TOKEN" \
+curl -X POST -H "authorization: Bearer $TOKEN" \
   https://<app>/api/maintenance/purge -d '{"older_than_days": 30}'
 ```
 
@@ -111,7 +111,7 @@ worse, treated as ancient and deleted.
 Trigger one by hand at any time:
 
 ```bash
-curl -X POST -H "x-owner-token: $AI_ANKI_OWNER_TOKEN" \
+curl -X POST -H "authorization: Bearer $TOKEN" \
   https://<app>/api/maintenance/backup
 ```
 
@@ -119,25 +119,57 @@ curl -X POST -H "x-owner-token: $AI_ANKI_OWNER_TOKEN" \
 
 ```bash
 aws s3 ls s3://ai-anki-backups/db/ --endpoint-url https://fly.storage.tigris.dev
-aws s3 cp s3://ai-anki-backups/db/<key> ./restore.db.gz \
-  --endpoint-url https://fly.storage.tigris.dev
-gunzip restore.db.gz
 ```
 
-Then stop the machine, put `restore.db` at `/data/ai-anki.db` on the volume, and
-start it again. Boot recovery re-claims any job the old process was mid-way
-through; nothing else needs doing.
+```bash
+aws s3 cp s3://ai-anki-backups/db/<key> ./restore.dump \
+  --endpoint-url https://fly.storage.tigris.dev
+```
+
+```bash
+pg_restore --dbname "$AI_ANKI_DATABASE_URL" --no-owner --clean --if-exists ./restore.dump
+```
+
+**Use a `pg_restore` whose major version matches the target server.** Verified
+on 2026-08-21: a dump taken with client 17 restores its data correctly into a
+16 server, but `pg_restore` 17 emits `SET transaction_timeout = 0`, which 16
+does not recognise — so every row lands and the command still exits non-zero.
+An automated restore that trusts the exit code would report a working restore
+as a failure, or a failed one as working, depending on which way it guessed.
+
+The image carries client 17 because `pg_dump` refuses outright to dump a server
+newer than itself; Debian's own package is 15 and cannot back up a modern
+server at all. The rule is one-directional: the client must be at least as new
+as the server it dumps.
 
 Test a restore before you need one. A backup nobody has restored is a backup
 whose format nobody has checked.
 
-## Owner credential
+## Administrators
 
-`AI_ANKI_OWNER_TOKEN` is a runtime secret. Unset means nobody is the owner,
-which **closes** minting rather than opening it.
+Sign-in belongs to Supabase. This application holds no credentials at all, so a
+copy of its database is not a set of working logins.
 
-Minting invites, revoking them, viewing spend, purging and backups are all owner
-surfaces, reached with `x-owner-token` rather than a session.
+Administration is a role on an account rather than a second credential carried
+separately. `/api/spend`, `/api/maintenance/purge` and `/api/maintenance/backup`
+need `account.is_admin`; every other API surface needs only a valid token.
+
+**The first account created in an empty database becomes the administrator**,
+and only while there is no other. That makes a fresh deployment usable without
+seeding anything — sign in once, and you are it.
+
+Every promotion after that is a deliberate SQL statement:
+
+```sql
+UPDATE account SET is_admin = true WHERE email = 'someone@example.com';
+```
+
+An in-app "make admin" surface is deliberately absent. It is a
+privilege-escalation feature nobody asked for.
+
+To call an admin endpoint by hand, take the access token from the browser —
+your Supabase session is in local storage — and send it as
+`authorization: Bearer <token>`.
 
 ## Deploying
 
@@ -156,22 +188,29 @@ fly launch --no-deploy --copy-config --name ai-anki --region lhr
 fly volumes create ai_anki_data --region lhr --size 3
 ```
 
+The volume holds uploads and `TMPDIR` only. The database is Supabase's now,
+which is why losing this volume costs a re-upload rather than everything.
+
 ```bash
-fly secrets set ANTHROPIC_API_KEY=sk-ant-... AI_ANKI_OWNER_TOKEN=$(openssl rand -hex 32)
+fly secrets set ANTHROPIC_API_KEY=sk-ant-... \
+  AI_ANKI_DATABASE_URL="postgresql://..." \
+  AI_ANKI_JWT_ISSUER="https://<project>.supabase.co/auth/v1"
+```
+
+The database URL and the issuer both come from the Supabase project. The
+frontend needs its own two, at build time rather than run time, because Vite
+inlines them:
+
+```bash
+fly secrets set VITE_SUPABASE_URL="https://<project>.supabase.co" VITE_SUPABASE_ANON_KEY="<anon key>"
 ```
 
 ```bash
 fly deploy
 ```
 
-Then mint yourself an invite — the application is default-deny, and an unset
-owner token closes minting rather than opening it:
-
-```bash
-curl -X POST -H "x-owner-token: $AI_ANKI_OWNER_TOKEN" \
-  -H 'content-type: application/json' -d '{"person":"you"}' \
-  https://ai-anki.fly.dev/api/invites
-```
+Then open the app and sign in with Google. Being the first account in an empty
+database makes you the administrator; nothing needs seeding.
 
 ### Every deploy after that
 

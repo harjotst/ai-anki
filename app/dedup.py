@@ -12,7 +12,7 @@ a judgement the user is better placed to make.
 
 from __future__ import annotations
 
-import sqlite3
+import psycopg
 
 from app.ledger import normalise
 
@@ -32,13 +32,13 @@ def specificity(deck_path: str) -> int:
     return len((deck_path or "").split("::"))
 
 
-def flag_duplicates(conn: sqlite3.Connection, job_id: str) -> int:
+def flag_duplicates(conn: psycopg.Connection, job_id: str) -> int:
     """Mark each repeat of a question, keeping the most specific copy.
 
     Returns how many were flagged.
     """
     rows = conn.execute(
-        "SELECT card_uuid, deck_path, front FROM card WHERE job_id = ? ORDER BY position",
+        "SELECT card_uuid, deck_path, front FROM card WHERE job_id = %s ORDER BY position",
         (job_id,),
     ).fetchall()
 
@@ -59,11 +59,11 @@ def flag_duplicates(conn: sqlite3.Connection, job_id: str) -> int:
             loser, winner = dict(row), held
 
         conn.execute(
-            "UPDATE card SET duplicate_of = ? WHERE card_uuid = ?",
+            "UPDATE card SET duplicate_of = %s WHERE card_uuid = %s",
             (winner["card_uuid"], loser["card_uuid"]),
         )
         conn.execute(
-            "UPDATE card SET duplicate_of = NULL WHERE card_uuid = ?", (winner["card_uuid"],)
+            "UPDATE card SET duplicate_of = NULL WHERE card_uuid = %s", (winner["card_uuid"],)
         )
         flagged += 1
 

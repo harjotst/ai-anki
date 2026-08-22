@@ -1,181 +1,153 @@
-"""Access control: who gets in, and what one leaked link costs.
+"""Access control: who gets in, and what one leaked token costs.
 
-Access is a per-person Invite Token rather than one shared password, so a leak
-is a revocation rather than a rotation and every job is attributable to
-somebody. These tests drive it through the HTTP boundary like everything else.
+Credentials moved to the auth provider when the application grew accounts, and
+most of what this file used to assert moved with them — minting, revoking,
+session expiry and login lockout are the provider's problem now, and testing
+them here would be testing somebody else's code.
+
+What remains is everything the provider cannot do for us: refusing a request
+that proves nothing, refusing a state-changing request another site made, and
+keeping one person's decks away from another's. That last one is the reason
+this file exists at all — it is the only thing standing between two users.
 """
 
 import pytest
 
-from tests.conftest import OWNER, SESSION_COOKIE
-
-
-def mint(client, person: str) -> str:
-    minted = client.post("/api/invites", json={"person": person}, headers=OWNER)
-    assert minted.status_code == 201, minted.text
-    return minted.json()["token"]
-
-
-def sign_in_as(client, token: str):
-    client.cookies.clear()
-    return client.post("/api/session", json={"token": token})
+from tests.conftest import SOMEBODY_ELSE, TESTER
 
 
 def upload(client):
     return client.post("/api/jobs", files={"file": ("a.txt", b"Some material.", "text/plain")})
 
 
-def test_the_owner_mints_an_invite_that_lets_one_person_in(client):
-    minted = client.post("/api/invites", json={"person": "alice"}, headers=OWNER)
+# --- the door ------------------------------------------------------------
 
-    assert minted.status_code == 201
-    token = minted.json()["token"]
 
-    # Without it the application is shut, not merely unhelpful.
-    client.cookies.clear()
+def test_the_api_is_shut_to_a_request_that_proves_nothing(client):
+    """Default-deny, and it is the whole surface rather than route by route.
+
+    An endpoint added later is shut until somebody names it public, because the
+    failure mode of the alternative is a forgotten decorator on the one route
+    that spends money.
+    """
+    client.sign_out()
+
+    assert client.get("/api/jobs").status_code == 401
+    assert client.get("/api/decks").status_code == 401
+    assert upload(client).status_code == 401
+    # A job that genuinely does not exist is still 401, not 404: which ids exist
+    # is not something a stranger gets to learn.
     assert client.get("/api/jobs/no-such-job").status_code == 401
 
-    redeemed = client.post("/api/session", json={"token": token})
 
-    assert redeemed.status_code == 200
-    assert redeemed.json()["person"] == "alice"
-    # Past the door: the job genuinely does not exist, which is a different
-    # answer from "you may not ask".
+def test_a_token_this_issuer_did_not_sign_gets_nowhere(client, identities):
+    """The forged-credential case, end to end through the guard."""
+    from tests.conftest import Identities
+
+    forger = Identities()
+    client.headers.update({"authorization": f"Bearer {forger.token(TESTER)}"})
+
+    assert client.get("/api/jobs").status_code == 401
+
+
+def test_past_the_door_a_missing_job_is_missing_rather_than_forbidden(client):
     assert client.get("/api/jobs/no-such-job").status_code == 404
-    assert client.cookies[SESSION_COOKIE]
 
 
-def test_minting_needs_the_owner_credential_not_merely_a_valid_session(client):
-    # An invited person is inside the application but is not the owner; if they
-    # could mint, one leaked link would become an unlimited supply of them.
-    assert client.post("/api/invites", json={"person": "mallory"}).status_code == 401
+@pytest.mark.parametrize(
+    "header",
+    [{"sec-fetch-site": "cross-site"}, {"origin": "https://evil.example"}],
+)
+def test_a_mutating_request_from_another_site_is_refused(client, header):
+    """Belt and braces.
 
+    The credential is a header rather than a cookie, so another site's page
+    cannot attach it in the first place — this is the second lock, not the
+    first, and it costs nothing to keep.
+    """
+    assert upload(client).status_code == 201  # same-origin, allowed
 
-def test_revoking_one_persons_invite_leaves_everybody_else_alone(boot):
-    with boot() as machine:
-        alice_token = mint(machine, "alice")
-        bob_token = mint(machine, "bob")
-
-        alice_id = alice_token.split(".")[0]
-        assert machine.post(f"/api/invites/{alice_id}/revoke", headers=OWNER).status_code == 200
-
-        assert sign_in_as(machine, alice_token).status_code == 401
-        assert sign_in_as(machine, bob_token).status_code == 200
-
-
-def test_a_revoked_invite_stops_working_on_the_request_after_it_not_the_login_after_it(boot):
-    """Revocation is the whole point of per-person tokens, so it cannot wait."""
-    with boot() as machine:
-        token = mint(machine, "alice")
-        assert sign_in_as(machine, token).status_code == 200
-        assert upload(machine).status_code == 201
-
-        machine.post(f"/api/invites/{token.split('.')[0]}/revoke", headers=OWNER)
-
-        # Same live session, no new sign-in: the door shuts underneath it.
-        assert upload(machine).status_code == 401
-
-
-def test_a_session_stops_working_once_its_absolute_expiry_passes(boot):
-    with boot(session_ttl_seconds=-1) as machine:
-        token = mint(machine, "alice")
-        assert sign_in_as(machine, token).status_code == 200
-        # The expiry is stored, not carried by the cookie, so the holder cannot
-        # edit it.
-        assert upload(machine).status_code == 401
-
-
-def test_the_session_cookie_carries_the_flags_that_keep_it_out_of_reach(client):
-    token = mint(client, "alice")
-    client.cookies.clear()
-
-    header = client.post("/api/session", json={"token": token}).headers["set-cookie"].lower()
-
-    assert "httponly" in header, "page script must not be able to read it"
-    assert "secure" in header, "it must never travel over plain http"
-    assert "samesite=lax" in header
-    assert "path=/" in header
-
-
-def test_a_wrong_token_is_refused_and_repeated_attempts_lock_the_address_out(boot):
-    with boot(login_delay_seconds=0) as machine:
-        refused = machine.post("/api/session", json={"token": "aaaaaaaa.not-the-secret"})
-        assert refused.status_code == 401
-
-        for _ in range(5):
-            machine.post("/api/session", json={"token": "aaaaaaaa.not-the-secret"})
-
-        locked = machine.post("/api/session", json={"token": "aaaaaaaa.not-the-secret"})
-        assert locked.status_code == 429
-        assert int(locked.headers["retry-after"]) > 0
-
-        # The lockout is on guessing, and a real token is not a guess — but it
-        # is refused too while the address is locked, which is the safe way round.
-        good = mint(machine, "alice")
-        assert machine.post("/api/session", json={"token": good}).status_code == 429
-
-
-@pytest.mark.parametrize("header", [{"sec-fetch-site": "cross-site"}, {"origin": "https://evil.test"}])
-def test_a_mutating_request_from_another_site_is_refused_even_with_a_valid_session(client, header):
-    # The cookie is SameSite=Lax, so a cross-site POST should not carry it at
-    # all — this is the second lock, for the request that arrives anyway.
-    assert (
-        client.post("/api/jobs", files={"file": ("a.txt", b"x", "text/plain")}, headers=header)
-    ).status_code == 403
+    client.headers.update(header)
+    assert upload(client).status_code == 403
 
 
 def test_reading_from_another_site_is_not_treated_as_an_attack(client):
-    # Safe methods change nothing, so refusing them buys nothing and breaks
-    # ordinary navigation.
-    assert client.get("/api/jobs/no-such-job", headers={"sec-fetch-site": "cross-site"}).status_code == 404
+    client.headers.update({"sec-fetch-site": "cross-site"})
+
+    assert client.get("/api/jobs/no-such-job").status_code == 404
 
 
-def test_emptying_the_session_table_signs_everybody_out_at_once(boot, tmp_path):
-    """The break-glass lever, exercised where it actually lives.
+# --- accounts ------------------------------------------------------------
 
-    This is the one test that touches the database directly rather than going
-    through HTTP, because the operation itself is an operator running SQL. What
-    it asserts is still observed from outside: the next request is refused.
-    """
+
+def test_a_first_visit_creates_the_account_and_a_second_does_not(client, pg_dsn):
+    """Created lazily on a verified request, not by a trigger on the provider's
+    user table — a trigger would fire for people this application has never
+    heard from, and would live where the tests cannot reach it."""
     from app import db
 
+    for _ in range(3):
+        assert client.get("/api/jobs").status_code == 200
+
+    conn = db.connect(pg_dsn)
+    try:
+        rows = conn.execute("SELECT id FROM account").fetchall()
+    finally:
+        conn.close()
+    assert [str(row["id"]) for row in rows] == [TESTER]
+
+
+def test_the_first_account_in_an_empty_database_is_the_administrator(boot):
+    """Somebody has to be able to see spend on a fresh deployment, and it
+    cannot be a second credential carried separately."""
     with boot() as machine:
-        alice, bob = mint(machine, "alice"), mint(machine, "bob")
-        sign_in_as(machine, alice)
-        assert upload(machine).status_code == 201
+        assert machine.get("/api/spend").status_code == 200
 
-        conn = db.connect(tmp_path / "ai-anki.db")
-        try:
-            conn.execute("DELETE FROM session")
-        finally:
-            conn.close()
-
-        assert upload(machine).status_code == 401
-        # Sessions are gone; the invites behind them are untouched, so everyone
-        # signs back in rather than needing a new link.
-        assert sign_in_as(machine, bob).status_code == 200
+        machine.sign_in_as(SOMEBODY_ELSE)
+        assert machine.get("/api/jobs").status_code == 200, "an ordinary person is let in"
+        assert machine.get("/api/spend").status_code == 403, "but not to the admin surfaces"
+        assert machine.post("/api/maintenance/purge", json={}).status_code == 403
 
 
-def test_every_job_records_the_invite_that_created_it(boot):
+def test_signing_in_again_after_a_restart_needs_nothing_stored(boot):
+    """The credential is held by the client. Nothing on the server has to
+    survive a restart for somebody to still be signed in — which is exactly
+    what moving sessions to the provider bought."""
+    with boot() as machine:
+        job_id = upload(machine).json()["job_id"]
+
+    with boot() as restarted:
+        assert restarted.get(f"/api/jobs/{job_id}").status_code == 200
+
+
+# --- one person's decks are not another's --------------------------------
+
+
+def test_every_job_records_the_account_that_created_it(boot):
     """Spend has to be attributable to a person, which starts here."""
     with boot() as machine:
-        alice = mint(machine, "alice")
-        sign_in_as(machine, alice)
-        alice_job = upload(machine).json()["job_id"]
+        machine.sign_in_as(TESTER)
+        mine = upload(machine).json()["job_id"]
 
-        recorded = machine.get(f"/api/jobs/{alice_job}").json()["invite_id"]
-        assert recorded == alice.split(".")[0]
+        machine.sign_in_as(SOMEBODY_ELSE)
+        theirs = upload(machine).json()["job_id"]
+
+        assert machine.get(f"/api/jobs/{theirs}").json()["account_id"] == SOMEBODY_ELSE
+        machine.sign_in_as(TESTER)
+        assert machine.get(f"/api/jobs/{mine}").json()["account_id"] == TESTER
 
 
 def test_one_persons_job_is_not_visible_to_another_person(boot):
+    """Answered as missing rather than as forbidden, so that a stranger cannot
+    learn which job ids exist by asking."""
     with boot() as machine:
-        alice = mint(machine, "alice")
-        bob = mint(machine, "bob")
+        machine.sign_in_as(TESTER)
+        mine = upload(machine).json()["job_id"]
 
-        sign_in_as(machine, alice)
-        alice_job = upload(machine).json()["job_id"]
+        machine.sign_in_as(SOMEBODY_ELSE)
 
-        sign_in_as(machine, bob)
-        # Answered as missing rather than forbidden: which job ids exist is not
-        # something another invited person should be able to enumerate.
-        assert machine.get(f"/api/jobs/{alice_job}").status_code == 404
+        assert machine.get(f"/api/jobs/{mine}").status_code == 404
+        assert machine.get(f"/api/jobs/{mine}/estimate").status_code == 404
+        assert machine.get(f"/api/jobs/{mine}/usage").status_code == 404
+        assert machine.get(f"/api/jobs/{mine}/diff").status_code == 404
+        assert machine.post(f"/api/jobs/{mine}/cards/reject", json={"card_uuids": []}).status_code == 404

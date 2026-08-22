@@ -16,10 +16,27 @@ jobs:
           # manylinux_2_35 and cp310-abi3, so the runner's glibc matters too.
           python-version: "3.12"
 
+      # testcontainers starts its own Postgres, so nothing is declared as a
+      # service here -- the suite is responsible for its own database and runs
+      # the same way on a laptop as it does here.
       - name: Install
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
+
+      # The pg_dump tests skip without a client, and skipping them in CI too
+      # would mean the backup path is never exercised anywhere automatically.
+      # Client 17 because pg_dump refuses to dump a server newer than itself.
+      - name: Postgres client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo tee /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc > /dev/null
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          pg_dump --version
 
       - name: Tests
         run: python -m pytest -q

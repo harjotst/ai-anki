@@ -122,25 +122,18 @@ Alembic. The hand-rolled `MIGRATIONS` list added on 2026-08-21 was correct for o
 
 ---
 
-### Task 5: Simplify the worker
+### Task 5: ~~Simplify the worker~~ — WITHDRAWN
 
-**Files:** `app/worker.py`, `app/jobs.py`, `tests/test_job_state_machine.py`
+The spec's claim that `FOR UPDATE SKIP LOCKED` replaces `worker_id` was wrong.
+`SKIP LOCKED` pulls work off a queue; this application has no queue, because a
+job runs in the process that received its HTTP request. `worker_id` and
+`recover_orphans` solve a different problem — an in-flight job with no live
+process — and solve it correctly for the one machine this spec deploys.
 
-`worker_id`, `recover_orphans` and the boot-time reclaim exist because one SQLite writer could not express "claim this row, and let another process take it if I die". Postgres can.
+The multi-machine answer is a lease with a heartbeat. It buys nothing until
+there is a second machine. Not built.
 
-- [ ] **Step 1: Write the failing test** — two workers race for one job; exactly one claims it.
-
-```python
-def test_two_workers_racing_for_one_job_produce_one_claim(pg_dsn):
-    job_id = seed_generating_job(pg_dsn, stale_by_minutes=20)
-    claims = [claim_one(pg_dsn) for _ in range(2)]
-    assert [c for c in claims if c] == [job_id]
-```
-
-- [ ] **Step 2: Run it, watch it fail.**
-- [ ] **Step 3: Implement `SELECT … FOR UPDATE SKIP LOCKED`** claiming.
-- [ ] **Step 4: Delete `worker_id`, `recover_orphans`, and the boot reclaim.** The drain is untouched — it is correct and has nothing to do with the datastore.
-- [ ] **Step 5: Run the suite.** - [ ] **Step 6: Commit.**
+See the spec's "The worker" section for the full correction.
 
 ---
 

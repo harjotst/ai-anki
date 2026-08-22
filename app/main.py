@@ -7,7 +7,6 @@ reachable from here; nothing below it is reached into directly by tests.
 from __future__ import annotations
 
 import asyncio
-import os
 import time as _time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -16,23 +15,14 @@ from pathlib import Path
 import anthropic
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
 
-from app import auth
-from app import backup, budget, db, generation, ingestion, jobs, ledger, packaging, planning, progress, providers
+from app import auth, backup, budget, db, generation, identity, ingestion
+from app import jobs, ledger, packaging, planning, progress, providers
 from app import worker as worker_module
 
 
-class InviteRequest(BaseModel):
-    person: str
-
-
-class SessionRequest(BaseModel):
-    token: str
-
-
 def create_app(
-    db_path: Path,
+    database_url: str,
     data_dir: Path,
     anthropic_client: anthropic.Anthropic | None = None,
     provider=None,
@@ -41,23 +31,19 @@ def create_app(
     drain_deadline_seconds: float = worker_module.DRAIN_DEADLINE_SECONDS,
     heartbeat_seconds: float = progress.HEARTBEAT_SECONDS,
     event_stream_seconds: float = progress.MAX_STREAM_SECONDS,
-    owner_token: str | None = None,
-    session_ttl_seconds: float = auth.SESSION_TTL_SECONDS,
     per_job_token_ceiling: int = budget.PER_JOB_TOKEN_CEILING,
     daily_budget_usd: float = budget.DAILY_BUDGET_USD,
     global_daily_budget_usd: float = budget.GLOBAL_DAILY_BUDGET_USD,
-    login_delay_seconds: float = auth.FAILED_LOGIN_DELAY_SECONDS,
-    lockout_seconds: float = auth.LOCKOUT_SECONDS,
+    # Who is allowed in. Injected rather than built from the environment here,
+    # so tests exercise the real verification against their own signing key.
+    verifier: identity.Verifier | None = None,
     # None means no off-platform copies. Tests pass one explicitly rather
     # than reaching for the environment.
     backup_destination: backup.Destination | None = None,
 ) -> FastAPI:
-    db_path = Path(db_path)
     data_dir = Path(data_dir)
     backup_destination = backup_destination or backup.destination_from_env()
-    # A runtime secret, never baked in. Unset means nobody is the owner, which
-    # shuts minting rather than opening it.
-    owner_token = owner_token or os.environ.get("AI_ANKI_OWNER_TOKEN")
+    verifier = verifier or identity.from_env()
     # One vendor, chosen by configuration. Everything vendor-specific lives behind
     # this object; nothing below it knows which one is serving the job.
     provider = provider or providers.build(client=anthropic_client)
@@ -67,13 +53,17 @@ def create_app(
             f"{provider.name}/{provider.model} cannot serve this workload: "
             + "; ".join(refusals)
         )
-    worker = worker_module.Worker(db_path, provider, drain_deadline_seconds=drain_deadline_seconds)
+    worker = worker_module.Worker(database_url, provider, drain_deadline_seconds=drain_deadline_seconds)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        db.initialise(db_path)
+        # Idempotent, and not how production gets its schema -- Fly runs
+        # `alembic upgrade head` as a release command, once per deploy, before
+        # any machine starts. This is what makes a local run and a test work
+        # without a migration step, and a test asserts the two agree.
+        db.initialise(database_url)
         data_dir.mkdir(parents=True, exist_ok=True)
-        conn = db.connect(db_path)
+        conn = db.connect(database_url)
         try:
             # Whatever the last machine was doing when it went, it is not doing
             # it now.
@@ -88,7 +78,7 @@ def create_app(
         backups = None
         if backup_destination is not None:
             backups = asyncio.create_task(
-                backup.nightly(db_path, data_dir / "tmp", backup_destination)
+                backup.nightly(database_url, data_dir / "tmp", backup_destination)
             )
 
         yield
@@ -100,25 +90,25 @@ def create_app(
         await worker.drain()
 
     app = FastAPI(title="ai-anki", lifespan=lifespan)
-    app.add_middleware(auth.Guard, db_path=db_path, owner_token=owner_token)
+    app.add_middleware(auth.Guard, database_url=database_url, verifier=verifier)
 
     async def get_conn():
         # Async so the connection is created and used on the same thread. A sync
         # dependency would be resolved in a threadpool and then handed to the
         # event loop, which SQLite refuses. Statements here are sub-millisecond;
         # long-running work belongs in the worker, not in a request.
-        conn = db.connect(db_path)
+        conn = db.connect(database_url)
         try:
             yield conn
         finally:
             conn.close()
 
-    def guard_spend(conn, invite_id):
+    def guard_spend(conn, account_id):
         """Refuse work we already know we should not pay for."""
         try:
             budget.check(
                 conn,
-                invite_id,
+                account_id,
                 daily_budget_usd=daily_budget_usd,
                 global_daily_budget_usd=global_daily_budget_usd,
             )
@@ -136,85 +126,31 @@ def create_app(
             raise HTTPException(status_code=413, detail=str(too_large))
         return measured
 
-    async def invite_of(request: Request) -> str:
-        """The Invite Token this request arrived with, as the guard established it."""
-        return request.state.invite_id
+    async def account_of(request: Request) -> identity.Account:
+        """Whose request this is, as the guard established it."""
+        return request.state.account
 
-    def owned_job(conn, job_id: str, invite_id: str) -> jobs.Job:
+    def owned_job(conn, job_id: str, account_id: str) -> jobs.Job:
         """Load a job, but only for the person whose job it is.
 
         Somebody else's job is answered as missing rather than as forbidden:
-        which job ids exist is not something an invited stranger should be able
-        to enumerate.
+        which job ids exist is not something a signed-in stranger should be
+        able to enumerate.
         """
         job = jobs.load_job(conn, job_id)
-        if job is None or job.invite_id != invite_id:
+        if job is None or str(job.account_id) != str(account_id):
             raise HTTPException(status_code=404, detail="job not found")
         return job
-
-    @app.post("/api/invites", status_code=201)
-    async def mint_invite(request: InviteRequest, conn=Depends(get_conn)):
-        """Mint one person's Invite Token. The only time the token exists."""
-        token = auth.mint_invite(conn, request.person)
-        return JSONResponse({"person": request.person, "token": token}, status_code=201)
-
-    @app.get("/api/invites")
-    async def read_invites(conn=Depends(get_conn)):
-        return {"invites": [asdict(invite) for invite in auth.list_invites(conn)]}
-
-    @app.post("/api/invites/{invite_id}/revoke")
-    async def revoke_invite(invite_id: str, conn=Depends(get_conn)):
-        if not auth.revoke_invite(conn, invite_id):
-            raise HTTPException(status_code=404, detail="no such invite")
-        return {"invite_id": invite_id, "revoked": True}
-
-    @app.post("/api/session")
-    async def sign_in(body: SessionRequest, request: Request, conn=Depends(get_conn)):
-        """Redeem an Invite Token for a session."""
-        address = request.client.host if request.client else "unknown"
-        waiting = auth.lockout_remaining(conn, address, lockout_seconds=lockout_seconds)
-        if waiting > 0:
-            raise HTTPException(
-                status_code=429,
-                detail="too many failed sign-ins from this address",
-                headers={"retry-after": str(int(waiting) + 1)},
-            )
-        try:
-            session_id, person = auth.redeem(
-                conn, body.token, ttl_seconds=session_ttl_seconds
-            )
-        except auth.InvalidToken as exc:
-            auth.record_failure(conn, address)
-            # Every failure costs the same fixed wait, so the answer arrives no
-            # sooner for a token that got closer, and guessing runs at the rate
-            # we choose rather than the rate the network allows.
-            await asyncio.sleep(login_delay_seconds)
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-
-        auth.clear_failures(conn, address)
-        response = JSONResponse({"person": person})
-        # No expiry on the cookie itself: the session's absolute expiry lives in
-        # the database, where it cannot be edited by the holder, and one source
-        # of truth is better than two that can disagree.
-        response.set_cookie(
-            auth.SESSION_COOKIE,
-            session_id,
-            httponly=True,
-            secure=True,
-            samesite="lax",
-            path="/",
-        )
-        return response
 
     @app.post("/api/jobs", status_code=201)
     async def create_job(
         file: UploadFile,
         deck_id: str | None = Form(default=None),
         conn=Depends(get_conn),
-        invite_id: str = Depends(invite_of),
+        account: identity.Account = Depends(account_of),
     ):
         """Start a Job. Naming a Deck continues it; naming none begins one."""
-        if deck_id and not ledger.deck_exists(conn, deck_id, invite_id):
+        if deck_id and not ledger.deck_exists(conn, deck_id, account.id):
             raise HTTPException(status_code=404, detail="no such deck")
         content = await file.read()
         job_id = jobs.create_job(
@@ -222,7 +158,7 @@ def create_app(
             data_dir,
             file.filename or "upload",
             content,
-            invite_id=invite_id,
+            account_id=account.id,
             deck_id=deck_id,
         )
         return JSONResponse({"job_id": job_id}, status_code=201)
@@ -241,38 +177,38 @@ def create_app(
         )
 
     @app.get("/api/jobs")
-    async def list_jobs(conn=Depends(get_conn), invite_id: str = Depends(invite_of)):
+    async def list_jobs(conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
         """Everything this person has started. The way back to a run."""
-        return {"jobs": jobs.list_jobs(conn, invite_id)}
+        return {"jobs": jobs.list_jobs(conn, account.id)}
 
     @app.get("/api/decks")
-    async def list_decks(conn=Depends(get_conn), invite_id: str = Depends(invite_of)):
-        return {"decks": ledger.list_decks(conn, invite_id)}
+    async def list_decks(conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
+        return {"decks": ledger.list_decks(conn, account.id)}
 
     @app.patch("/api/decks/{deck_id}")
     async def rename_deck(
         deck_id: str,
         body: dict,
         conn=Depends(get_conn),
-        invite_id: str = Depends(invite_of),
+        account: identity.Account = Depends(account_of),
     ):
-        if not ledger.deck_exists(conn, deck_id, invite_id):
+        if not ledger.deck_exists(conn, deck_id, account.id):
             raise HTTPException(status_code=404, detail="no such deck")
         try:
             with db.transaction(conn):
-                ledger.rename_deck(conn, deck_id, invite_id, str(body.get("name", "")))
+                ledger.rename_deck(conn, deck_id, account.id, str(body.get("name", "")))
         except ledger.DeckNameRejected as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"deck_id": deck_id}
 
     @app.get("/api/jobs/{job_id}")
     async def read_job(
-        job_id: str, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
+        job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
-        job = owned_job(conn, job_id, invite_id)
+        job = owned_job(conn, job_id, account.id)
         return {
             "job_id": job.id,
-            "invite_id": job.invite_id,
+            "account_id": job.account_id,
             "deck_id": job.deck_id,
             "state": job.state,
             "error": job.error,
@@ -312,7 +248,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found")
         return StreamingResponse(
             progress.stream(
-                db_path,
+                database_url,
                 job_id,
                 after_id=progress.last_event_id(request.headers.get("last-event-id")),
                 is_disconnected=request.is_disconnected,
@@ -328,7 +264,7 @@ def create_app(
         job = jobs.load_job(conn, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
-        guard_spend(conn, job.invite_id)
+        guard_spend(conn, job.account_id)
         _claim(conn, job_id, jobs.PLANNING)
 
         try:
@@ -350,10 +286,10 @@ def create_app(
 
     @app.get("/api/decks/{deck_id}/ledger")
     async def read_ledger(
-        deck_id: str, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
+        deck_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What this Deck knows about its own cards. Never purged."""
-        if not ledger.deck_exists(conn, deck_id, invite_id):
+        if not ledger.deck_exists(conn, deck_id, account.id):
             raise HTTPException(status_code=404, detail="no such deck")
         return {"deck_id": deck_id, "cards": ledger.entries(conn, deck_id)}
 
@@ -381,32 +317,37 @@ def create_app(
     async def take_backup(conn=Depends(get_conn)):
         """Take a consistent copy while the application keeps running.
 
-        Off the platform when a bucket is configured, because a copy on the
-        same volume protects against nothing that actually happens. Onto the
-        volume otherwise, so the endpoint still does something useful before
-        object storage is set up.
+        Off the platform when a bucket is configured. Onto local disk otherwise,
+        so the endpoint still does something useful before object storage is set
+        up — and says plainly that a copy sitting next to the machine that made
+        it is not a backup.
+
+        The managed database takes its own point-in-time backups. This one is
+        vendor independence rather than redundancy: it is the copy that can
+        leave.
         """
         if backup_destination is not None:
             result = await asyncio.to_thread(
-                backup.run, db_path, data_dir / "tmp", backup_destination
+                backup.run, database_url, data_dir / "tmp", backup_destination
             )
             return {"destination": backup_destination.bucket, **result}
-        written = db.backup_to(db_path, data_dir / "backup.db")
+        local = data_dir / "backup.dump"
+        await asyncio.to_thread(backup.snapshot, database_url, local)
         return {
-            "path": str(data_dir / "backup.db"),
-            "bytes": written,
+            "path": str(local),
+            "bytes": local.stat().st_size,
             "warning": (
-                "on the same volume as the database it copies; set "
-                "AI_ANKI_BACKUP_BUCKET for an off-platform copy"
+                "written to local disk, not off-platform; set "
+                "AI_ANKI_BACKUP_BUCKET for a copy that survives losing this machine"
             ),
         }
 
     @app.get("/api/jobs/{job_id}/usage")
     async def read_usage(
-        job_id: str, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
+        job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What this job actually cost, derived from what the API reported."""
-        owned_job(conn, job_id, invite_id)
+        owned_job(conn, job_id, account.id)
         calls = jobs.load_usage(conn, job_id)
         priced = [{**call, "cost_usd": ingestion.cost_of(call, provider.prices)} for call in calls]
         return {
@@ -417,7 +358,7 @@ def create_app(
 
     @app.get("/api/jobs/{job_id}/estimate")
     async def read_estimate(
-        job_id: str, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
+        job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What this job measures and what it is expected to cost.
 
@@ -425,7 +366,7 @@ def create_app(
         not the limit, and showing it as one would be a promise the pipeline
         cannot keep.
         """
-        job = owned_job(conn, job_id, invite_id)
+        job = owned_job(conn, job_id, account.id)
         input_tokens = ingestion.count_input_tokens(
             provider, plan_request_for(conn, job_id, job)
         )
@@ -448,7 +389,7 @@ def create_app(
 
     @app.put("/api/jobs/{job_id}/plan")
     async def edit_plan(
-        job_id: str, body: dict, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
+        job_id: str, body: dict, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """Replace the plan with the user's edited version.
 
@@ -456,7 +397,7 @@ def create_app(
         trusted client, and the response schema could not express these bounds
         in the first place.
         """
-        owned_job(conn, job_id, invite_id)
+        owned_job(conn, job_id, account.id)
         try:
             plan = planning.validate(body)
         except planning.InvalidPlan as exc:
@@ -478,9 +419,9 @@ def create_app(
 
     @app.delete("/api/jobs/{job_id}/topics/{topic_id}/cards")
     async def reject_topic(
-        job_id: str, topic_id: str, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
+        job_id: str, topic_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
-        owned_job(conn, job_id, invite_id)
+        owned_job(conn, job_id, account.id)
         return {"rejected": jobs.delete_topic_cards(conn, job_id, topic_id)}
 
     @app.post("/api/cards/{card_uuid}/reroll")
@@ -490,7 +431,7 @@ def create_app(
         if existing is None:
             raise HTTPException(status_code=404, detail="no such card")
         job = jobs.load_job(conn, existing["job_id"])
-        guard_spend(conn, job.invite_id if job else None)
+        guard_spend(conn, job.account_id if job else None)
 
         topic = jobs.topic_of(conn, existing["job_id"], existing["topic_id"])
         documents = jobs.documents_for(conn, existing["job_id"], provider)
@@ -519,10 +460,10 @@ def create_app(
 
     @app.get("/api/jobs/{job_id}/download-info")
     async def download_info(
-        job_id: str, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
+        job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What to tell the user at the moment they import."""
-        owned_job(conn, job_id, invite_id)
+        owned_job(conn, job_id, account.id)
         return {
             "anki_search": f"tag:aianki::job::{job_id}",
             "import_advice": (
@@ -547,7 +488,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found")
         if job.plan is None:
             raise HTTPException(status_code=409, detail="job has no approved plan yet")
-        guard_spend(conn, job.invite_id)
+        guard_spend(conn, job.account_id)
         # Re-checked here, not only at admission: a plan multiplies the work and
         # the sources may have grown between the two passes.
         guard_size(
@@ -632,10 +573,10 @@ def create_app(
         job_id: str,
         body: dict,
         conn=Depends(get_conn),
-        invite_id: str = Depends(invite_of),
+        account: identity.Account = Depends(account_of),
     ):
         """Drop a selection in one call rather than one round trip per card."""
-        owned_job(conn, job_id, invite_id)
+        owned_job(conn, job_id, account.id)
         with db.transaction(conn):
             dropped = jobs.reject_cards(conn, job_id, list(body.get("card_uuids") or []))
         return {"job_id": job_id, "rejected": dropped}
@@ -645,20 +586,20 @@ def create_app(
         job_id: str,
         body: dict,
         conn=Depends(get_conn),
-        invite_id: str = Depends(invite_of),
+        account: identity.Account = Depends(account_of),
     ):
         """Mark a selection read. Accepting is what makes progress visible."""
-        owned_job(conn, job_id, invite_id)
+        owned_job(conn, job_id, account.id)
         with db.transaction(conn):
             marked = jobs.accept_cards(conn, job_id, list(body.get("card_uuids") or []))
         return {"job_id": job_id, "accepted": marked}
 
     @app.get("/api/jobs/{job_id}/diff")
     async def read_diff(
-        job_id: str, conn=Depends(get_conn), invite_id: str = Depends(invite_of)
+        job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What downloading now would do to the user's collection."""
-        job = owned_job(conn, job_id, invite_id)
+        job = owned_job(conn, job_id, account.id)
         if not job.deck_id:
             raise HTTPException(status_code=409, detail="job has no deck")
         split = ledger.classify(conn, job.deck_id, job_id)

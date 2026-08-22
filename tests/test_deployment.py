@@ -39,11 +39,14 @@ def test_no_secret_is_baked_into_the_image():
         assert forbidden not in DOCKERFILE, f"{forbidden} must be a runtime secret"
 
 
-def test_the_volume_is_mounted_where_the_database_and_uploads_live():
+def test_the_volume_is_mounted_where_the_uploads_live():
     mount = FLY["mounts"][0]
     assert mount["destination"] == "/data"
-    assert FLY["env"]["AI_ANKI_DB_PATH"].startswith("/data")
     assert FLY["env"]["AI_ANKI_DATA_DIR"].startswith("/data")
+    # The database is not here any more. Baking a path for it into the config
+    # would be a path nothing reads, which is worse than absent -- somebody
+    # would eventually believe it.
+    assert "AI_ANKI_DB_PATH" not in FLY["env"]
     # Starlette spools large uploads to TMPDIR; on the default that is the slow
     # ephemeral rootfs rather than the volume.
     assert FLY["env"]["TMPDIR"].startswith("/data")
@@ -76,9 +79,18 @@ def test_the_shutdown_signal_is_the_one_the_drain_listens_for():
 
 
 def test_the_entrypoint_reads_every_secret_from_the_environment():
+    """One place knows about the outside world, so `create_app` stays a
+    function the tests call with explicit arguments."""
     entry = (ROOT / "app" / "asgi.py").read_text()
-    assert "AI_ANKI_OWNER_TOKEN" in entry
+    assert "AI_ANKI_DATABASE_URL" in entry
     assert "os.environ" in entry
+    # Nothing baked into the image, and nothing defaulted to a value that would
+    # quietly work: an unset database URL must stop the process, not start it
+    # against something else.
+    assert 'os.environ["AI_ANKI_DATABASE_URL"]' in entry
+
+    identity_module = (ROOT / "app" / "identity.py").read_text()
+    assert "AI_ANKI_JWT_ISSUER" in identity_module
 
 
 def test_ci_runs_strict_config_validation():
@@ -147,13 +159,36 @@ def test_the_built_frontend_calls_every_endpoint_the_journey_needs():
     built = max(bundles, key=lambda p: p.stat().st_mtime).read_text()
 
     for endpoint in (
-        "/api/session",       # sign in
-        "/api/jobs",          # upload
+        "/api/jobs",          # upload, and the job list
         "/plan",              # pass 1, and the edited-plan PUT
         "/generate",          # pass 2
         "/estimate",          # cost before approval
         "/cards",             # the review screen
         "/deck.apkg",         # download
         "/download-info",     # the Anki guidance
+        "/api/decks",         # the deck list and the continuation picker
+        "/diff",              # what downloading would change
     ):
         assert endpoint in built, f"the built UI never calls {endpoint}"
+
+    # Sign-in is the provider's, not ours, and the credential rides in a header
+    # rather than a cookie -- so a build that still posts a token to our own
+    # session endpoint is a build that did not get the change.
+    # Bulk review builds its path from the verb, so the literal never appears.
+    # Asserting on the shape instead of the whole string is the honest version:
+    # it still fails if the screen stops calling it at all.
+    assert "/cards/" in built
+    assert '"accept"' in built or "'accept'" in built
+
+    assert "/api/session" not in built
+    assert "signInWithOAuth" in built
+    assert "authorization" in built.lower()
+
+
+def test_migrations_run_once_per_deploy_rather_than_on_every_boot():
+    """Boot is the wrong place for a migration.
+
+    It runs on every restart, including the ones the platform causes, and two
+    machines booting together would race each other through the same statements.
+    """
+    assert FLY["deploy"]["release_command"] == "alembic upgrade head"

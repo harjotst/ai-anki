@@ -27,5 +27,10 @@ data/
 *.db-shm
 *.apkg
 
+# Local editor and agent settings, which are per-machine rather than
+# per-project.
+.claude/settings.local.json
+
 # OS
 .DS_Store
+.claude/launch.json

@@ -9,10 +9,10 @@ and no way to tell whose job did it.
 from __future__ import annotations
 
 import os
-import sqlite3
+import psycopg
 import time
 
-from app import ingestion
+from app import db, ingestion
 
 # Defaults. Each is a knob rather than a constant because the right value
 # depends on who is using it and how much the owner will spend finding out.
@@ -36,42 +36,43 @@ def generation_disabled() -> bool:
     return os.environ.get(KILL_SWITCH_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def spend_since(conn: sqlite3.Connection, since: float, invite_id: str | None = None) -> float:
+def spend_since(conn: psycopg.Connection, since: float, account_id: str | None = None) -> float:
     """What has been spent in a window, from recorded usage rather than estimates."""
     sql = (
         "SELECT c.input_tokens, c.cache_creation_input_tokens, c.cache_read_input_tokens,"
         " c.output_tokens FROM api_call c JOIN job j ON j.id = c.job_id"
-        " WHERE c.created_at >= ?"
+        " WHERE c.created_at >= %s"
     )
-    params: list = [since]
-    if invite_id is not None:
-        sql += " AND j.invite_id = ?"
-        params.append(invite_id)
+    params: list = [db.at(since)]
+    if account_id is not None:
+        sql += " AND j.account_id = %s"
+        params.append(account_id)
     return round(
         sum(ingestion.cost_of(dict(row)) for row in conn.execute(sql, params).fetchall()), 6
     )
 
 
-def spend_by_person(conn: sqlite3.Connection) -> list[dict]:
-    """Who has spent what. Attribution is the reason invites are per-person."""
+def spend_by_person(conn: psycopg.Connection) -> list[dict]:
+    """Who has spent what. Attribution is why a job records whose it is."""
     rows = conn.execute(
-        "SELECT i.id AS invite_id, i.person, c.input_tokens, c.cache_creation_input_tokens,"
+        "SELECT a.id AS account_id, COALESCE(a.display_name, a.email, a.id::text) AS person,"
+        " c.input_tokens, c.cache_creation_input_tokens,"
         " c.cache_read_input_tokens, c.output_tokens FROM api_call c"
-        " JOIN job j ON j.id = c.job_id JOIN invite i ON i.id = j.invite_id"
+        " JOIN job j ON j.id = c.job_id JOIN account a ON a.id = j.account_id"
     ).fetchall()
     totals: dict[str, dict] = {}
     for row in rows:
         entry = totals.setdefault(
-            row["invite_id"],
-            {"invite_id": row["invite_id"], "person": row["person"], "cost_usd": 0.0},
+            str(row["account_id"]),
+            {"account_id": str(row["account_id"]), "person": row["person"], "cost_usd": 0.0},
         )
         entry["cost_usd"] = round(entry["cost_usd"] + ingestion.cost_of(dict(row)), 6)
     return sorted(totals.values(), key=lambda entry: -entry["cost_usd"])
 
 
 def check(
-    conn: sqlite3.Connection,
-    invite_id: str | None,
+    conn: psycopg.Connection,
+    account_id: str | None,
     *,
     daily_budget_usd: float,
     global_daily_budget_usd: float,
@@ -90,9 +91,9 @@ def check(
             f"(${global_spend:.2f} in the last 24 hours). Nothing new will start today."
         )
 
-    if invite_id is None:
+    if account_id is None:
         return
-    personal = spend_since(conn, day_ago, invite_id)
+    personal = spend_since(conn, day_ago, account_id)
     if personal >= daily_budget_usd:
         raise BudgetExceeded(
             f"Your rolling 24-hour budget of ${daily_budget_usd:.2f} is spent "

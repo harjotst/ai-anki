@@ -13,14 +13,20 @@ kill_timeout = "300s"
 
 [build]
 
+# Migrations run once per deploy, before any new machine starts, rather than
+# from inside the application's own boot. Boot is the wrong place: it runs on
+# every restart, including the ones the platform causes, and two machines
+# booting together would race each other through the same migration.
+[deploy]
+  release_command = "alembic upgrade head"
+
 [env]
-  AI_ANKI_DB_PATH = "/data/ai-anki.db"
   AI_ANKI_DATA_DIR = "/data/uploads"
   TMPDIR = "/data/tmp"
 
-# SQLite and the uploads live here. A volume binds this app to one machine in
-# one region — which is the intended shape: two machines would be two different
-# databases, silently.
+# Uploads and the conversion scratch space live here. The database does not —
+# it is managed Postgres now, which is what makes losing this volume cost a
+# re-upload rather than everything.
 [[mounts]]
   source = "ai_anki_data"
   destination = "/data"

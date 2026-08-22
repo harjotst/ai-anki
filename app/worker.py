@@ -50,7 +50,7 @@ class WorkerDraining(Exception):
 class Worker:
     def __init__(
         self,
-        db_path: Path,
+        database_url: str,
         provider,
         *,
         drain_deadline_seconds: float = DRAIN_DEADLINE_SECONDS,
@@ -58,7 +58,7 @@ class Worker:
         # Identifies this process instance. A job claimed by any other id is a
         # job whose machine is gone.
         self.id = uuid.uuid4().hex
-        self._db_path = db_path
+        self._database_url = database_url
         self._provider = provider
         self._drain_deadline_seconds = drain_deadline_seconds
         self._draining = False
@@ -104,7 +104,7 @@ class Worker:
         if not stranded:
             return
 
-        conn = db.connect(self._db_path)
+        conn = db.connect(self._database_url)
         try:
             for job_id in stranded:
                 jobs.interrupt_job(conn, job_id, "interrupted by a shutdown")
@@ -123,7 +123,7 @@ class Worker:
         one pays a cache-creation charge — which costs more than not caching at
         all. One call ahead of the pack turns N-1 misses into N-1 reads.
         """
-        conn = db.connect(self._db_path)
+        conn = db.connect(self._database_url)
         try:
             documents = jobs.documents_for(conn, job_id, self._provider)
             pending = jobs.unfinished_topics(conn, job_id)
