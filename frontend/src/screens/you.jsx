@@ -18,8 +18,17 @@ export default function You() {
     setError(null);
     try {
       setMe(await cached("/api/me", 300_000));
-      if (configured) setAttached(await identities());
-      else setAttached([]);
+      if (configured) {
+        try {
+          setAttached(await identities());
+        } catch (problem) {
+          // A development session: the token came from the local dev server,
+          // so the auth provider has no session to enumerate. Anything other
+          // than that specific absence is a real error.
+          if (/session missing/i.test(problem.message)) setAttached("dev");
+          else throw problem;
+        }
+      } else setAttached([]);
     } catch (problem) {
       setError(problem.message);
     }
@@ -31,8 +40,9 @@ export default function You() {
   if (!me || attached === null)
     return <div className="screen"><Skeleton h={60} /><Skeleton h={120} /></div>;
 
-  const have = new Set(attached.map((one) => one.provider));
-  const lastOne = attached.length <= 1;
+  const devSession = attached === "dev";
+  const linked = devSession ? [] : attached;
+  const lastOne = linked.length <= 1;
 
   const act = async (run, doneMessage) => {
     try {
@@ -62,7 +72,13 @@ export default function You() {
         />
       </div>
 
-      {configured && (
+      {devSession && (
+        <p className="cap">
+          Signed in through the local development server. Sign-in methods
+          appear here when you are on a real account.
+        </p>
+      )}
+      {configured && !devSession && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div className="cap" style={{ paddingLeft: 2 }}>How you sign in</div>
           <p className="cap">
@@ -71,7 +87,7 @@ export default function You() {
             separately would otherwise look like a different person.
           </p>
           {PROVIDERS.map(([provider, label]) => {
-            const identity = attached.find((one) => one.provider === provider);
+            const identity = linked.find((one) => one.provider === provider);
             return (
               <div key={provider} className="rowcard"
                 style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", minHeight: 56 }}>
@@ -104,7 +120,7 @@ export default function You() {
       )}
 
       <button className="btn btn-ghost" onClick={async () => {
-        if (configured) await signOut();
+        if (configured && !devSession) await signOut();
         window.localStorage.removeItem("ai_anki_dev_token");
         window.location.assign("/");
       }}>
