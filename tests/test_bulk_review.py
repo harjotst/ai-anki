@@ -74,22 +74,15 @@ def test_an_edited_card_counts_as_reviewed_because_somebody_clearly_looked(clien
 
 
 def test_bulk_review_of_somebody_elses_job_is_refused(boot, claude):
-    from tests.conftest import OWNER
+    from tests.conftest import SOMEBODY_ELSE, TESTER
 
     with boot() as machine:
-        def mint(person):
-            return machine.post(
-                "/api/invites", json={"person": person}, headers=OWNER
-            ).json()["token"]
 
-        alice, bob = mint("alice"), mint("bob")
-        machine.cookies.clear()
-        machine.post("/api/session", json={"token": alice})
+        machine.sign_in_as(TESTER)
         job_id = generated(machine, claude)
         hers = uuids(machine, job_id)
 
-        machine.cookies.clear()
-        machine.post("/api/session", json={"token": bob})
+        machine.sign_in_as(SOMEBODY_ELSE)
         refused = machine.post(
             f"/api/jobs/{job_id}/cards/reject", json={"card_uuids": hers}
         )

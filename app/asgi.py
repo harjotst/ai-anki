@@ -22,9 +22,6 @@ def _float(name: str, default: float) -> float:
 app = create_app(
     database_url=os.environ["AI_ANKI_DATABASE_URL"],
     data_dir=Path(os.environ.get("AI_ANKI_DATA_DIR", "/data/uploads")),
-    # Runtime secrets, never baked into the image. An unset owner token closes
-    # minting rather than opening it.
-    owner_token=os.environ.get("AI_ANKI_OWNER_TOKEN"),
     daily_budget_usd=_float("AI_ANKI_DAILY_BUDGET_USD", budget.DAILY_BUDGET_USD),
     global_daily_budget_usd=_float(
         "AI_ANKI_GLOBAL_DAILY_BUDGET_USD", budget.GLOBAL_DAILY_BUDGET_USD

@@ -33,47 +33,32 @@ from psycopg.rows import dict_row
 # representation is the point: a timezone bug here surfaces as backups pruned
 # early or a budget window resetting at the wrong hour, months later.
 SCHEMA = """
--- An Invite Token is one person's credential, minted and revoked on its own.
--- Only the digest of the secret half is kept: the token is shown once, when it
--- is minted, and the database can never give it back.
+-- One person. The id is the auth provider's own user id rather than a second
+-- identifier of our own, because two identifiers for one person is how accounts
+-- get orphaned: the day they disagree, one of them owns the decks and the other
+-- owns the login.
 --
--- Superseded by `account` and deleted once sign-in moves to Supabase; it lives
--- here so the port and the identity change can be separate, reviewable steps.
-CREATE TABLE IF NOT EXISTS invite (
-    id                TEXT PRIMARY KEY,
-    person            TEXT NOT NULL,
-    secret_hash       TEXT NOT NULL,
-    revoked_at        TIMESTAMPTZ,
+-- Credentials are not here and never will be. The provider holds those; this
+-- table holds everything about a person that is not a credential, which is what
+-- makes a copy of this database useless as a set of working logins.
+CREATE TABLE IF NOT EXISTS account (
+    id                UUID PRIMARY KEY,
+    email             TEXT,
+    display_name      TEXT,
+    -- Owner surfaces -- spend, purge, backup -- are a role on the account
+    -- rather than a second credential carried separately. The first account in
+    -- an empty database gets it; every promotion after that is a deliberate
+    -- SQL statement, because an in-app "make admin" button is a
+    -- privilege-escalation feature nobody asked for.
+    is_admin          BOOLEAN NOT NULL DEFAULT FALSE,
     created_at        TIMESTAMPTZ NOT NULL
 );
-
--- Sessions live here rather than in the process, so that a restart does not
--- sign everybody out and truncating this table does.
-CREATE TABLE IF NOT EXISTS session (
-    id_hash           TEXT PRIMARY KEY,
-    invite_id         TEXT NOT NULL REFERENCES invite(id) ON DELETE CASCADE,
-    created_at        TIMESTAMPTZ NOT NULL,
-    -- Absolute, and never extended by use.
-    expires_at        TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS session_invite_idx ON session(invite_id);
-
--- Failed sign-ins, per address. In the database with everything else because a
--- lockout held in memory is lifted by the restart an attacker can cause.
-CREATE TABLE IF NOT EXISTS login_failure (
-    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    address           TEXT NOT NULL,
-    failed_at         TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS login_failure_address_idx ON login_failure(address, failed_at);
 
 -- A Deck is the long-lived thing a user builds up over a term. Jobs come and go
 -- against it; it owns the Card Ledger and outlives all of them.
 CREATE TABLE IF NOT EXISTS deck (
     id                TEXT PRIMARY KEY,
-    invite_id         TEXT REFERENCES invite(id),
+    account_id        UUID REFERENCES account(id),
     name              TEXT NOT NULL,
     -- Every export stamps strictly later than the last. Anki's default import
     -- is "update if newer" on note modification time, so an export that does
@@ -88,9 +73,9 @@ CREATE TABLE IF NOT EXISTS deck (
 CREATE TABLE IF NOT EXISTS job (
     deck_id           TEXT REFERENCES deck(id),
     id                TEXT PRIMARY KEY,
-    -- Which Invite Token created it. Attribution is the point: it is what makes
-    -- spend somebody's rather than the application's.
-    invite_id         TEXT REFERENCES invite(id),
+    -- Whose job it is. Attribution is the point: it is what makes spend
+    -- somebody's rather than the application's.
+    account_id        UUID REFERENCES account(id),
     state             TEXT NOT NULL,
     error             TEXT,
     plan_json         TEXT,

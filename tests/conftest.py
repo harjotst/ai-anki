@@ -3,19 +3,82 @@ import threading
 import time
 import uuid as _uuid
 
+import jwt
+from cryptography.hazmat.primitives.asymmetric import rsa
+
 import anthropic
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import auth
+from app import identity
 from app.main import create_app
 
-# The owner credential the test machine is configured with. Production reads it
-# from the environment; nothing is baked in.
-OWNER_TOKEN = "owner-credential-for-tests"
-OWNER = {"x-owner-token": OWNER_TOKEN}
-SESSION_COOKIE = auth.SESSION_COOKIE
+# --- who the tests are signed in as --------------------------------------
+#
+# Real RSA keys, real JWTs, real verification. Only the JWKS *fetch* is
+# replaced, which is the same seam `ClaudeScript` uses for the Anthropic
+# transport: the application's own auth code runs in full, so a mistake in it
+# fails here rather than in front of somebody's decks.
+
+ISSUER = "https://project.test.supabase.co/auth/v1"
+AUDIENCE = "authenticated"
+
+
+class Identities:
+    """A signing key, and accounts that can prove who they are with it."""
+
+    def __init__(self):
+        self._private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.kid = "test-key"
+
+    def jwks(self) -> dict:
+        return {
+            "keys": [
+                {
+                    **jwt.algorithms.RSAAlgorithm.to_jwk(
+                        self._private.public_key(), as_dict=True
+                    ),
+                    "kid": self.kid,
+                    "use": "sig",
+                    "alg": "RS256",
+                }
+            ]
+        }
+
+    def token(self, account_id: str, *, email: str | None = None, name: str | None = None) -> str:
+        issued = int(time.time())
+        claims = {
+            "sub": account_id,
+            "iss": ISSUER,
+            "aud": AUDIENCE,
+            "iat": issued,
+            "exp": issued + 3600,
+        }
+        if email:
+            claims["email"] = email
+        if name:
+            claims["user_metadata"] = {"full_name": name}
+        return jwt.encode(claims, self._private, algorithm="RS256", headers={"kid": self.kid})
+
+    def verifier(self):
+        return identity.Verifier(issuer=ISSUER, audience=AUDIENCE, fetch_keys=self.jwks)
+
+
+# The default persona. `ADMIN` is simply whoever arrives first in an empty
+# database, which is what the application does in production too.
+TESTER = "00000000-0000-0000-0000-000000000001"
+SOMEBODY_ELSE = "00000000-0000-0000-0000-000000000002"
+
+
+def account_id(seed: int) -> str:
+    """A stable, valid UUID per test persona. Supabase ids are UUIDs and the
+    column is typed as one, so a bare string would pass here and fail there."""
+    return str(_uuid.UUID(int=seed))
+
+
+def bearer(token: str) -> dict:
+    return {"authorization": f"Bearer {token}"}
 
 
 def _multipart_filename(body: bytes) -> str | None:
@@ -216,7 +279,12 @@ def claude():
 
 
 @pytest.fixture
-def boot(tmp_path, claude, pg_dsn):
+def identities():
+    return Identities()
+
+
+@pytest.fixture
+def boot(tmp_path, claude, pg_dsn, identities):
     """Start an application over the volume.
 
     The database and data directory are the same on every call, so a second call
@@ -225,29 +293,33 @@ def boot(tmp_path, claude, pg_dsn):
     is the shutdown.
     """
 
-    # One person, invited once, whose session is re-established on every restart
-    # — the same invite outliving the machine, which is the point of storing it.
-    invited = {"token": None}
-
     class Machine(TestClient):
-        """A started machine, signed in as the test's invited person.
+        """A started machine, signed in as the test's person.
 
-        The API is default-deny, so a client that has not signed in can only
-        observe 401s. Tests about the door itself clear the cookie to get back
+        The API is default-deny, so a client presenting no token can only
+        observe 401s. Tests about the door itself clear the header to get back
         outside it; every other test wants to already be through.
+
+        The credential is a header rather than a cookie, so it survives a
+        restart without anything being stored — which is the point of moving
+        sessions to the auth provider.
         """
 
         def __enter__(self):
             super().__enter__()
-            if invited["token"] is None:
-                minted = self.post("/api/invites", json={"person": "tester"}, headers=OWNER)
-                assert minted.status_code == 201, minted.text
-                invited["token"] = minted.json()["token"]
-            self.post("/api/session", json={"token": invited["token"]})
+            self.sign_in_as(TESTER)
+            return self
+
+        def sign_in_as(self, account: str, **claims):
+            self.headers.update(bearer(identities.token(account, **claims)))
+            return self
+
+        def sign_out(self):
+            self.headers.pop("authorization", None)
             return self
 
     def _boot(**settings) -> TestClient:
-        settings.setdefault("owner_token", OWNER_TOKEN)
+        settings.setdefault("verifier", identities.verifier())
         return Machine(
             create_app(
                 database_url=pg_dsn,
@@ -255,9 +327,8 @@ def boot(tmp_path, claude, pg_dsn):
                 anthropic_client=claude.client(),
                 **settings,
             ),
-            # Over https, because the session cookie is Secure and a client on
-            # plain http would silently decline to store it — which is the
-            # cookie working, not the test being awkward.
+            # Over https, because the application is served that way and a
+            # request that claims otherwise is not the one production sees.
             base_url="https://testserver",
         )
 

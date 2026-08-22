@@ -21,7 +21,8 @@ def test_the_schema_initialises(pg_dsn):
         ).fetchall()
     }
 
-    assert {"invite", "deck", "job", "source", "topic", "card", "job_event", "api_call"} <= tables
+    assert {"account", "deck", "job", "source", "topic", "card", "job_event", "api_call"} <= tables
+    assert "invite" not in tables, "credentials belong to the auth provider now"
     conn.close()
 
 

@@ -7,7 +7,7 @@ cap that stops everybody at once with no explanation.
 
 import pytest
 
-from tests.conftest import OWNER
+from tests.conftest import TESTER
 from tests.test_slot_matching import PLAN, card
 
 BIG_USAGE = {"input_tokens": 0, "cache_creation_input_tokens": 400_000, "output_tokens": 1_000}
@@ -94,22 +94,31 @@ def test_the_kill_switch_stops_generation_without_a_redeploy(boot, claude, monke
         assert claude.requests == [], "nothing may be generated while the switch is on"
 
 
-def test_the_owner_can_see_what_each_person_has_spent(boot, claude):
+def test_an_administrator_can_see_what_each_person_has_spent(boot, claude):
     with boot() as machine:
         job_id = start(machine, claude)
         plan_and_generate(machine, claude, job_id, usage=BIG_USAGE)
 
-        spend = machine.get("/api/spend", headers=OWNER).json()
+        spend = machine.get("/api/spend").json()
 
-        person = next(row for row in spend["people"] if row["person"] == "tester")
+        person = next(row for row in spend["people"] if row["account_id"] == TESTER)
         # 400,000 cache-write tokens at 2x $5/MTok is $4.00, worked out
         # independently of the code.
         assert person["cost_usd"] >= 4.00
-        assert person["invite_id"]
+        assert person["person"], "a name to show, even if it is only the id"
 
 
-def test_the_spend_view_is_the_owners_alone(client):
-    assert client.get("/api/spend").status_code == 401
+def test_the_spend_view_is_an_administrators_alone(boot):
+    """It names every person and what they cost, so it is not an ordinary
+    surface. The default persona is the first account in an empty database and
+    therefore the administrator; anybody arriving after them is not."""
+    from tests.conftest import SOMEBODY_ELSE
+
+    with boot() as machine:
+        assert machine.get("/api/spend").status_code == 200
+
+        machine.sign_in_as(SOMEBODY_ELSE)
+        assert machine.get("/api/spend").status_code == 403
 
 
 def test_the_provider_side_cap_is_written_down_as_the_outer_backstop():

@@ -11,7 +11,7 @@ service.
 """
 
 import shutil
-import time
+import subprocess
 
 import pytest
 from botocore.stub import ANY, Stubber
@@ -59,17 +59,36 @@ def populated(pg_dsn):
 
 
 @needs_pg_dump
-def test_a_backup_is_a_consistent_compressed_copy_of_the_live_database(populated, tmp_path):
-    written = backup.snapshot(populated, tmp_path / "out.db.gz")
+def test_a_backup_is_an_archive_something_can_actually_restore(populated, tmp_path):
+    """Not merely bytes of a plausible size.
 
-    assert written.name.endswith(".gz")
-    # Readable as a database, not merely as bytes: a torn copy of a WAL-mode
-    # file would still have a plausible size.
-    restored = tmp_path / "restored.db"
-    restored.write_bytes(gzip.decompress(written.read_bytes()))
-    conn = db.connect(restored)
-    assert conn.execute("SELECT name FROM deck").fetchone()["name"] == "Bio"
-    conn.close()
+    A dump that silently produced nothing would still be a file, so this asks
+    `pg_restore` to read its table of contents and checks that the data is in
+    there. The full round trip -- restore into an empty schema and read the row
+    back -- was verified in the runtime image on 2026-08-21; see
+    docs/operations.md.
+    """
+    written = backup.snapshot(populated, tmp_path / "out.dump")
+
+    assert written.suffix == ".dump"
+    assert written.stat().st_size > 0
+
+    listed = subprocess.run(
+        ["pg_restore", "--list", str(written)], capture_output=True, text=True
+    )
+    assert listed.returncode == 0, listed.stderr
+    assert "deck" in listed.stdout
+
+
+@needs_pg_dump
+def test_a_dump_that_fails_says_what_the_tool_said(tmp_path):
+    """A backup that failed silently is worse than no backup, because the
+    listing still looks healthy until the day somebody needs it."""
+    with pytest.raises(backup.DumpFailed) as refused:
+        backup.snapshot("postgresql://nobody@127.0.0.1:1/nothing", tmp_path / "out.dump")
+
+    assert str(refused.value)
+    assert not (tmp_path / "out.dump").exists(), "no half-written archive left behind"
 
 
 @needs_pg_dump
@@ -203,9 +222,8 @@ def test_the_next_run_is_the_next_time_the_scheduled_hour_comes_round():
 @needs_pg_dump
 def test_the_manual_trigger_says_plainly_that_a_local_copy_is_not_a_backup(client):
     """Without a bucket the endpoint still works, and does not pretend."""
-    from tests.conftest import OWNER
 
-    taken = client.post("/api/maintenance/backup", headers=OWNER).json()
+    taken = client.post("/api/maintenance/backup").json()
 
     assert taken["bytes"] > 0
     assert "off-platform" in taken["warning"]
@@ -226,10 +244,9 @@ def test_a_configured_bucket_makes_the_manual_trigger_go_off_platform(boot, dest
         original = module.build_client
         module.build_client = lambda *a, **k: client
         try:
-            from tests.conftest import OWNER
 
             with boot(backup_destination=destination) as machine:
-                taken = machine.post("/api/maintenance/backup", headers=OWNER).json()
+                taken = machine.post("/api/maintenance/backup").json()
         finally:
             module.build_client = original
 

@@ -102,8 +102,8 @@ class Job:
     error: str | None
     plan: dict | None
     source_filenames: list[str]
-    # The Invite Token that created this job, which is who its spend belongs to.
-    invite_id: str | None = None
+    # The Account that created this job, which is who its spend belongs to.
+    account_id: str | None = None
     attempt_count: int = 0
     deck_id: str | None = None
 
@@ -194,7 +194,7 @@ def create_job(
     filename: str,
     content: bytes,
     *,
-    invite_id: str,
+    account_id: str,
     deck_id: str | None = None,
 ) -> str:
     job_id = uuid.uuid4().hex
@@ -211,10 +211,10 @@ def create_job(
         # A Job always runs against a Deck. Without one named, it starts a new
         # lineage; naming one continues the deck the user is already building.
         if deck_id is None:
-            deck_id = ledger.create_deck(conn, name=safe_filename(filename), invite_id=invite_id)
+            deck_id = ledger.create_deck(conn, name=safe_filename(filename), account_id=account_id)
         conn.execute(
-            "INSERT INTO job (id, invite_id, deck_id, state) VALUES (%s, %s, %s, %s)",
-            (job_id, invite_id, deck_id, UPLOADED),
+            "INSERT INTO job (id, account_id, deck_id, state) VALUES (%s, %s, %s, %s)",
+            (job_id, account_id, deck_id, UPLOADED),
         )
         conn.execute(
             "INSERT INTO source (job_id, filename, stored_path, byte_size, position)"
@@ -227,7 +227,7 @@ def create_job(
 
 def load_job(conn: psycopg.Connection, job_id: str) -> Job | None:
     row = conn.execute(
-        "SELECT id, invite_id, deck_id, state, error, plan_json, attempt_count"
+        "SELECT id, account_id, deck_id, state, error, plan_json, attempt_count"
         " FROM job WHERE id = %s",
         (job_id,),
     ).fetchone()
@@ -243,15 +243,15 @@ def load_job(conn: psycopg.Connection, job_id: str) -> Job | None:
         deck_id=row["deck_id"],
         plan=json.loads(row["plan_json"]) if row["plan_json"] else None,
         source_filenames=[s["filename"] for s in sources],
-        invite_id=row["invite_id"],
+        account_id=row["account_id"],
         attempt_count=row["attempt_count"],
     )
 
 
-def list_jobs(conn: psycopg.Connection, invite_id: str | None) -> list[dict]:
+def list_jobs(conn: psycopg.Connection, account_id: str | None) -> list[dict]:
     """Every job this person started, newest first.
 
-    Scoped to the invite rather than filtered client-side: the list is the only
+    Scoped to the account rather than filtered client-side: the list is the only
     handle on a run once its tab is gone, so it is also the only place a job
     could leak from.
     """
@@ -261,9 +261,9 @@ def list_jobs(conn: psycopg.Connection, invite_id: str | None) -> list[dict]:
         "         ORDER BY s.position LIMIT 1) AS source_filename,"
         "       (SELECT COUNT(*) FROM card c WHERE c.job_id = j.id) AS card_count"
         "  FROM job j LEFT JOIN deck d ON d.id = j.deck_id"
-        " WHERE j.invite_id IS NOT DISTINCT FROM %s"
+        " WHERE j.account_id IS NOT DISTINCT FROM %s"
         " ORDER BY j.created_at DESC, j.id DESC",
-        (invite_id,),
+        (account_id,),
     ).fetchall()
     return [
         {

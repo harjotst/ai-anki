@@ -60,19 +60,19 @@ def fingerprint(front: str) -> str:
     return hashlib.sha256(normalise(front).encode("utf-8")).hexdigest()[:32]
 
 
-def create_deck(conn: psycopg.Connection, name: str, invite_id: str | None) -> str:
+def create_deck(conn: psycopg.Connection, name: str, account_id: str | None) -> str:
     deck_id = uuid.uuid4().hex
     conn.execute(
-        "INSERT INTO deck (id, invite_id, name, created_at) VALUES (%s, %s, %s, %s)",
-        (deck_id, invite_id, name, db.now()),
+        "INSERT INTO deck (id, account_id, name, created_at) VALUES (%s, %s, %s, %s)",
+        (deck_id, account_id, name, db.now()),
     )
     return deck_id
 
 
-def deck_exists(conn: psycopg.Connection, deck_id: str, invite_id: str | None) -> bool:
+def deck_exists(conn: psycopg.Connection, deck_id: str, account_id: str | None) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM deck WHERE id = %s AND invite_id IS NOT DISTINCT FROM %s",
-        (deck_id, invite_id),
+        "SELECT 1 FROM deck WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
+        (deck_id, account_id),
     ).fetchone()
     return row is not None
 
@@ -81,7 +81,7 @@ class DeckNameRejected(Exception):
     """A name Anki could not show, or a person could not tell apart from blank."""
 
 
-def list_decks(conn: psycopg.Connection, invite_id: str | None) -> list[dict]:
+def list_decks(conn: psycopg.Connection, account_id: str | None) -> list[dict]:
     """The decks this person is building, most recently created first.
 
     `last_exported_at` is None rather than 0 for a deck nothing has been
@@ -94,9 +94,9 @@ def list_decks(conn: psycopg.Connection, invite_id: str | None) -> list[dict]:
         "       (SELECT COUNT(DISTINCT c.card_uuid) FROM card c WHERE c.deck_id = d.id)"
         "         AS card_count,"
         "       (SELECT COUNT(*) FROM job j WHERE j.deck_id = d.id) AS job_count"
-        "  FROM deck d WHERE d.invite_id IS NOT DISTINCT FROM %s"
+        "  FROM deck d WHERE d.account_id IS NOT DISTINCT FROM %s"
         " ORDER BY d.created_at DESC",
-        (invite_id,),
+        (account_id,),
     ).fetchall()
     return [
         {
@@ -116,7 +116,7 @@ def list_decks(conn: psycopg.Connection, invite_id: str | None) -> list[dict]:
 
 
 def rename_deck(
-    conn: psycopg.Connection, deck_id: str, invite_id: str | None, name: str
+    conn: psycopg.Connection, deck_id: str, account_id: str | None, name: str
 ) -> None:
     """Give a deck a name a person chose.
 

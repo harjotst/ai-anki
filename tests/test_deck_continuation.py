@@ -108,23 +108,16 @@ def test_a_continuation_that_reuses_a_topic_id_finds_the_cards_to_revise(client,
 
 
 def test_a_continuation_of_a_deck_you_do_not_own_is_refused(boot, claude):
-    from tests.conftest import OWNER
+    from tests.conftest import SOMEBODY_ELSE, TESTER
 
     with boot() as machine:
-        def mint(person):
-            return machine.post(
-                "/api/invites", json={"person": person}, headers=OWNER
-            ).json()["token"]
 
-        alice, bob = mint("alice"), mint("bob")
 
-        machine.cookies.clear()
-        machine.post("/api/session", json={"token": alice})
+        machine.sign_in_as(TESTER)
         upload(machine)
         her_deck = machine.get("/api/decks").json()["decks"][0]["deck_id"]
 
-        machine.cookies.clear()
-        machine.post("/api/session", json={"token": bob})
+        machine.sign_in_as(SOMEBODY_ELSE)
         refused = machine.post(
             "/api/jobs",
             files={"file": ("x.txt", b"Material.", "text/plain")},

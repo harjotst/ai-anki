@@ -76,9 +76,18 @@ def test_the_shutdown_signal_is_the_one_the_drain_listens_for():
 
 
 def test_the_entrypoint_reads_every_secret_from_the_environment():
+    """One place knows about the outside world, so `create_app` stays a
+    function the tests call with explicit arguments."""
     entry = (ROOT / "app" / "asgi.py").read_text()
-    assert "AI_ANKI_OWNER_TOKEN" in entry
+    assert "AI_ANKI_DATABASE_URL" in entry
     assert "os.environ" in entry
+    # Nothing baked into the image, and nothing defaulted to a value that would
+    # quietly work: an unset database URL must stop the process, not start it
+    # against something else.
+    assert 'os.environ["AI_ANKI_DATABASE_URL"]' in entry
+
+    identity_module = (ROOT / "app" / "identity.py").read_text()
+    assert "AI_ANKI_JWT_ISSUER" in identity_module
 
 
 def test_ci_runs_strict_config_validation():

@@ -7,19 +7,10 @@ going, kept spending, and became unreachable. That is not a missing convenience
 trust with a term's material.
 """
 
-from tests.conftest import OWNER
+from tests.conftest import SOMEBODY_ELSE, TESTER
 from tests.test_planning import PLAN, upload
 
 
-def mint(client, person: str) -> str:
-    minted = client.post("/api/invites", json={"person": person}, headers=OWNER)
-    assert minted.status_code == 201, minted.text
-    return minted.json()["token"]
-
-
-def sign_in_as(client, token: str):
-    client.cookies.clear()
-    return client.post("/api/session", json={"token": token})
 
 
 # --- jobs ----------------------------------------------------------------
@@ -61,12 +52,11 @@ def test_the_job_list_reports_how_many_cards_are_waiting(client, claude):
 
 def test_one_persons_job_list_never_shows_another_persons_jobs(boot, claude):
     with boot() as machine:
-        alice, bob = mint(machine, "alice"), mint(machine, "bob")
 
-        sign_in_as(machine, alice)
+        machine.sign_in_as(TESTER)
         hers = upload(machine)
 
-        sign_in_as(machine, bob)
+        machine.sign_in_as(SOMEBODY_ELSE)
         his = upload(machine)
 
         assert [j["job_id"] for j in machine.get("/api/jobs").json()["jobs"]] == [his]
@@ -118,13 +108,12 @@ def test_a_deck_name_that_anki_cannot_use_is_refused(client, claude):
 
 def test_one_persons_deck_list_never_shows_another_persons_decks(boot, claude):
     with boot() as machine:
-        alice, bob = mint(machine, "alice"), mint(machine, "bob")
 
-        sign_in_as(machine, alice)
+        machine.sign_in_as(TESTER)
         upload(machine)
         her_deck = machine.get("/api/decks").json()["decks"][0]["deck_id"]
 
-        sign_in_as(machine, bob)
+        machine.sign_in_as(SOMEBODY_ELSE)
         upload(machine)
 
         assert her_deck not in [d["deck_id"] for d in machine.get("/api/decks").json()["decks"]]

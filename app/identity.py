@@ -19,6 +19,7 @@ the provider on demand.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -196,3 +197,18 @@ def account_for(conn: psycopg.Connection, claims: dict) -> Account:
             (account_id, email, display_name, founder, db.now()),
         )
     return Account(id=account_id, email=email, display_name=display_name, is_admin=founder)
+
+
+def from_env() -> Verifier:
+    """The production verifier, built from the auth project's own settings.
+
+    One place reads the environment, matching `asgi.py`'s rule: everything
+    configurable is read at the edge so that `create_app` stays a function the
+    tests call with explicit arguments.
+    """
+    issuer = os.environ["AI_ANKI_JWT_ISSUER"].rstrip("/")
+    return Verifier(
+        issuer=issuer,
+        audience=os.environ.get("AI_ANKI_JWT_AUDIENCE", "authenticated"),
+        fetch_keys=jwks_fetcher(os.environ.get("AI_ANKI_JWKS_URL") or f"{issuer}/.well-known/jwks.json"),
+    )

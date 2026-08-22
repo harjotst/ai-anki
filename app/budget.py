@@ -36,7 +36,7 @@ def generation_disabled() -> bool:
     return os.environ.get(KILL_SWITCH_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def spend_since(conn: psycopg.Connection, since: float, invite_id: str | None = None) -> float:
+def spend_since(conn: psycopg.Connection, since: float, account_id: str | None = None) -> float:
     """What has been spent in a window, from recorded usage rather than estimates."""
     sql = (
         "SELECT c.input_tokens, c.cache_creation_input_tokens, c.cache_read_input_tokens,"
@@ -44,26 +44,27 @@ def spend_since(conn: psycopg.Connection, since: float, invite_id: str | None = 
         " WHERE c.created_at >= %s"
     )
     params: list = [db.at(since)]
-    if invite_id is not None:
-        sql += " AND j.invite_id = %s"
-        params.append(invite_id)
+    if account_id is not None:
+        sql += " AND j.account_id = %s"
+        params.append(account_id)
     return round(
         sum(ingestion.cost_of(dict(row)) for row in conn.execute(sql, params).fetchall()), 6
     )
 
 
 def spend_by_person(conn: psycopg.Connection) -> list[dict]:
-    """Who has spent what. Attribution is the reason invites are per-person."""
+    """Who has spent what. Attribution is why a job records whose it is."""
     rows = conn.execute(
-        "SELECT i.id AS invite_id, i.person, c.input_tokens, c.cache_creation_input_tokens,"
+        "SELECT a.id AS account_id, COALESCE(a.display_name, a.email, a.id::text) AS person,"
+        " c.input_tokens, c.cache_creation_input_tokens,"
         " c.cache_read_input_tokens, c.output_tokens FROM api_call c"
-        " JOIN job j ON j.id = c.job_id JOIN invite i ON i.id = j.invite_id"
+        " JOIN job j ON j.id = c.job_id JOIN account a ON a.id = j.account_id"
     ).fetchall()
     totals: dict[str, dict] = {}
     for row in rows:
         entry = totals.setdefault(
-            row["invite_id"],
-            {"invite_id": row["invite_id"], "person": row["person"], "cost_usd": 0.0},
+            str(row["account_id"]),
+            {"account_id": str(row["account_id"]), "person": row["person"], "cost_usd": 0.0},
         )
         entry["cost_usd"] = round(entry["cost_usd"] + ingestion.cost_of(dict(row)), 6)
     return sorted(totals.values(), key=lambda entry: -entry["cost_usd"])
@@ -71,7 +72,7 @@ def spend_by_person(conn: psycopg.Connection) -> list[dict]:
 
 def check(
     conn: psycopg.Connection,
-    invite_id: str | None,
+    account_id: str | None,
     *,
     daily_budget_usd: float,
     global_daily_budget_usd: float,
@@ -90,9 +91,9 @@ def check(
             f"(${global_spend:.2f} in the last 24 hours). Nothing new will start today."
         )
 
-    if invite_id is None:
+    if account_id is None:
         return
-    personal = spend_since(conn, day_ago, invite_id)
+    personal = spend_since(conn, day_ago, account_id)
     if personal >= daily_budget_usd:
         raise BudgetExceeded(
             f"Your rolling 24-hour budget of ${daily_budget_usd:.2f} is spent "
