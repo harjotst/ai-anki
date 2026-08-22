@@ -25,7 +25,7 @@ import asyncio
 import uuid
 
 from app import providers
-from app import db, generation, jobs
+from app import db, generation, jobs, lessons
 
 # Thirty seconds under Fly's 300s `kill_timeout` ceiling: long enough that a
 # topic call already in flight lands rather than being re-billed — its output
@@ -150,12 +150,26 @@ class Worker:
             conn.close()
 
     async def _one_topic(self, conn, job_id: str, topic, documents) -> bool | None:
-        """Write one topic's cards. None means a shutdown cut it short."""
+        """Teach one topic, then write its cards.
+
+        The lesson comes first because that is the order the material has to be
+        met in: cards reinforce comprehension rather than creating it. It also
+        means the pacesetter warms BOTH cache lineages -- lessons and cards have
+        different schemas and therefore separate lineages -- before the rest of
+        the topics fan out and read them.
+
+        None means a shutdown cut it short.
+        """
         if self._draining:
             jobs.interrupt_job(conn, job_id, "interrupted by a shutdown")
             return None
 
         jobs.start_topic(conn, job_id, topic.topic_id)
+
+        taught = await self._teach(conn, job_id, topic, documents)
+        if taught is False:
+            return False
+
         request = generation.build_cards_request(
             documents,
             topic.topic,
@@ -179,4 +193,25 @@ class Worker:
             topic_id=topic.topic_id, model=self._provider.model,
         )
         jobs.save_topic_cards(conn, job_id, topic.topic, result.data["cards"])
+        return True
+
+    async def _teach(self, conn, job_id: str, topic, documents) -> bool:
+        """Write the lesson for one topic.
+
+        A refused lesson fails the topic rather than being skipped. A topic that
+        produced cards and no lesson would look complete on screen and be the
+        one thing this application is for, missing.
+        """
+        request = lessons.build_lesson_request(documents, topic.topic, self._provider)
+        try:
+            result = await asyncio.to_thread(self._provider.send, request)
+        except providers.Unusable as exc:
+            jobs.fail_topic(conn, job_id, topic.topic_id, str(exc))
+            return False
+
+        jobs.record_usage(
+            conn, job_id, "lesson", result.usage,
+            topic_id=topic.topic_id, model=self._provider.model,
+        )
+        jobs.save_lesson(conn, job_id, topic.topic, result.data)
         return True

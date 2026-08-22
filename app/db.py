@@ -188,6 +188,22 @@ CREATE INDEX IF NOT EXISTS card_deck_idx ON card(deck_id, card_uuid);
 
 CREATE INDEX IF NOT EXISTS card_job_idx ON card(job_id, position);
 
+-- What the application taught for one Topic. One row per (job_id, topic_id),
+-- the same key the cards use, because a lesson and the cards that reinforce it
+-- are regenerated together or not at all.
+--
+-- Stored as JSON rather than shredded into columns. Nothing queries inside a
+-- lesson -- it is read whole, by one person, for one topic -- and a schema
+-- change would otherwise mean a migration for what is really a document.
+CREATE TABLE IF NOT EXISTS lesson (
+    job_id            TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE,
+    topic_id          TEXT NOT NULL,
+    deck_path         TEXT NOT NULL,
+    lesson_json       TEXT NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (job_id, topic_id)
+);
+
 -- Progress, as a durable record rather than a live one. A row is appended in
 -- the same transaction as the change it reports, so an event exists exactly
 -- when the change it describes survived -- which is what lets a client that was

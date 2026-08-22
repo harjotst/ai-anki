@@ -104,6 +104,21 @@ class MachineKilled(BaseException):
 
 _KILLED = object()
 
+# What an unremarkable lesson looks like. Shape matters here, not prose: it has
+# to satisfy the schema so that anything reading a lesson back gets a real one.
+STOCK_LESSON = {
+    "in_one_line": "The topic, in one sentence.",
+    "why_it_matters": "Why somebody studying this course needs it.",
+    "sections": [
+        {"heading": "The first idea", "body": "What it is and why.", "builds_on": None}
+    ],
+    "worked_example": None,
+    "misconceptions": [
+        {"belief": "A common wrong idea.", "why_it_is_wrong": "Because of this."}
+    ],
+    "check_yourself": ["Can you explain it without the notes?"],
+}
+
 
 class ClaudeScript:
     """A scripted Anthropic API, faked at the network transport only.
@@ -126,6 +141,8 @@ class ClaudeScript:
         # How many message calls are in flight at once, and the high-water mark.
         # This is what lets a test assert the SHAPE of the fan-out rather than
         # its wall-clock, which would be flaky.
+        self._by_kind: dict = {}
+        self._kind_usage: dict | None = None
         self._in_flight = 0
         self.peak_in_flight = 0
         self.overlapped_with_first = False
@@ -168,6 +185,49 @@ class ClaudeScript:
 
     def replies_json(self, payload: dict, **kwargs):
         return self.replies(json.dumps(payload), **kwargs)
+
+    def answers(self, *, usage: dict | None = None, **by_kind):
+        """Answer according to what was asked, rather than in call order.
+
+        The queue is FIFO, which is exactly right while calls are sequential and
+        wrong the moment they are not: topics fan out concurrently, each making
+        a lesson call and a cards call, so the arrival order of six calls across
+        three topics is not something a test should have to predict.
+
+        A responder keys off the response schema instead — `lesson=`, `cards=`,
+        `topics=` — so the same script works however the calls interleave.
+        Accepts a dict, or a callable taking the request for tests that care
+        which topic they are answering.
+
+        Pass `usage=` to give every answer the same reported token usage,
+        which is how a test says "these calls read the cache" without caring
+        which call was which.
+        """
+        self._by_kind = dict(by_kind)
+        self._kind_usage = usage
+        return self
+
+    def calls_for(self, kind: str) -> list[dict]:
+        """Every request that asked for one kind of thing.
+
+        Tests that used to say "requests[1:] are the topic calls" cannot any
+        more: each topic makes two, and they interleave. Asking by kind says
+        what was meant.
+        """
+        return [r for r in self.requests if self._kind_of(r) == kind]
+
+    @staticmethod
+    def _kind_of(request: dict) -> str | None:
+        """What a request is asking for, read off its response schema."""
+        schema = (request.get("output_config") or {}).get("format", {}).get("schema", {})
+        properties = set(schema.get("properties") or {})
+        if "topics" in properties:
+            return "topics"
+        if "cards" in properties:
+            return "cards"
+        if "sections" in properties:
+            return "lesson"
+        return None
 
     def refuses(self, category: str = "bio"):
         """Queue a safety refusal — HTTP 200, empty content, no text block."""
@@ -251,12 +311,27 @@ class ClaudeScript:
             # alongside it misses and pays a write instead of a read.
             if index > 0 and self._in_flight > 1 and index == 1:
                 self.overlapped_with_first = True
-        if not self._queued:
+        request = self.requests[index]
+        kind = self._kind_of(request)
+        if kind == "lesson" and "lesson" not in self._by_kind:
+            # Every topic is taught before it is drilled, so a lesson call now
+            # happens in almost every test. Answering it from stock keeps the
+            # tests that are about something else -- slot matching, budgets,
+            # shutdown -- from having to know lessons exist at all. A test that
+            # cares what was taught says so with `answers(lesson=...)`.
+            return httpx.Response(200, json=self._as_message(STOCK_LESSON))
+        if kind in self._by_kind:
+            answer = self._by_kind[kind]
+            body, pause = self._as_message(
+                answer(request) if callable(answer) else answer, self._kind_usage
+            ), 0.0
+        elif not self._queued:
             raise AssertionError(
                 f"Claude was called {len(self.requests)} time(s) but only "
                 f"{len(self.requests) - 1} response(s) were scripted"
             )
-        body, pause = self._queued.pop(0)
+        else:
+            body, pause = self._queued.pop(0)
         if pause:
             self._paused.set()
             time.sleep(pause)
@@ -265,6 +340,24 @@ class ClaudeScript:
         if body is _KILLED:
             raise MachineKilled("the machine was killed during this call")
         return httpx.Response(200, json=body)
+
+    def _as_message(self, payload: dict, usage: dict | None = None) -> dict:
+        return {
+            "id": f"msg_{len(self.requests)}",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5",
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                **(usage or {}),
+            },
+        }
 
     def client(self) -> anthropic.Anthropic:
         return anthropic.Anthropic(

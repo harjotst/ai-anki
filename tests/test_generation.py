@@ -58,7 +58,9 @@ def test_each_topic_call_reuses_the_other_topic_calls_prefix(client, claude):
 
     client.post(f"/api/jobs/{job_id}/generate")
 
-    _plan_request, *topic_requests = claude.requests
+    # The cards calls, asked for by kind. Each topic also makes a lesson call,
+    # which shares a lineage with the other lessons and not with these.
+    topic_requests = claude.calls_for("cards")
     assert len(topic_requests) == 2
 
     first, *rest = topic_requests

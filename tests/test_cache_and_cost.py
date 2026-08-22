@@ -39,7 +39,7 @@ def run_job(client, claude):
     claude.counts_tokens(200_000).replies_json(PLAN, usage=WROTE_CACHE)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json(CARDS, usage=READ_CACHE).replies_json(CARDS, usage=READ_CACHE)
+    claude.answers(cards=CARDS, usage=READ_CACHE)
     client.post(f"/api/jobs/{job_id}/generate")
     return job_id
 
@@ -53,9 +53,11 @@ def test_every_topic_call_sends_a_byte_identical_cacheable_prefix(client, claude
     because structured outputs render ahead of the messages.
     """
     run_job(client, claude)
-    plan_request, *topic_requests = claude.requests
-
-    first, *rest = topic_requests
+    # By kind, not by position. Each topic now makes two calls -- a lesson and
+    # its cards -- and they interleave across a concurrent fan-out, so an index
+    # says nothing. Cards share a lineage with cards; lessons with lessons.
+    plan_request = claude.calls_for("topics")[0]
+    first, *rest = claude.calls_for("cards")
     for request in rest:
         assert request["system"] == first["system"], "a per-call system prompt kills the cache"
         assert request["messages"][0]["content"][0] == first["messages"][0]["content"][0]
@@ -86,7 +88,7 @@ def test_the_planning_pass_does_not_pay_for_a_cache_nothing_reads(client, claude
 def test_the_topic_calls_cache_for_five_minutes_because_they_run_back_to_back(client, claude):
     run_job(client, claude)
 
-    content = claude.requests[1]["messages"][0]["content"]
+    content = claude.calls_for("cards")[0]["messages"][0]["content"]
     documents = [block for block in content if block["type"] == "document"]
 
     assert content[-1]["type"] == "text", "the varying instruction goes after the breakpoint"
@@ -127,7 +129,13 @@ def test_the_job_reports_what_it_actually_cost_not_what_it_was_estimated_to(clie
     #   cards  2 x (400 uncached @ $5/MTok       = $0.0020
     #               200,000 cache read @ 0.1x    = $0.1000
     #               1,000 output @ $25/MTok      = $0.0250)
-    expected = 0.0025 + 2.0 + 0.05 + 2 * (0.002 + 0.1 + 0.025)
+    #   lesson 2 x (100 uncached @ $5/MTok       = $0.0005
+    #               50 output @ $25/MTok         = $0.00125)
+    #
+    # The lesson line is small here only because the fake's stock usage is
+    # small. On a real job it is the same order as the cards, which is the
+    # number the estimate has to carry.
+    expected = 0.0025 + 2.0 + 0.05 + 2 * (0.002 + 0.1 + 0.025) + 2 * (0.0005 + 0.00125)
     assert abs(usage["total_cost_usd"] - expected) < 0.0001
     assert usage["total_cost_usd"] > 0
 
@@ -160,4 +168,6 @@ def test_no_topic_call_is_made_until_the_planning_pass_has_returned(client, clau
 
     claude.replies_json(CARDS, usage=READ_CACHE).replies_json(CARDS, usage=READ_CACHE)
     client.post(f"/api/jobs/{job_id}/generate")
-    assert len(claude.requests) == 3
+    # One plan, then a lesson and a set of cards for each of the two topics.
+    assert len(claude.requests) == 5
+    assert len(claude.calls_for("cards")) == 2

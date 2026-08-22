@@ -734,6 +734,57 @@ def save_topic_cards(
         record_topic_event(conn, job_id, topic_id)
 
 
+def save_lesson(
+    conn: psycopg.Connection, job_id: str, topic: dict, lesson: dict
+) -> None:
+    """Keep what was taught, replacing any earlier attempt at the same topic."""
+    conn.execute(
+        "INSERT INTO lesson (job_id, topic_id, deck_path, lesson_json, created_at)"
+        " VALUES (%s, %s, %s, %s, %s)"
+        " ON CONFLICT (job_id, topic_id) DO UPDATE"
+        " SET deck_path = EXCLUDED.deck_path, lesson_json = EXCLUDED.lesson_json,"
+        "     created_at = EXCLUDED.created_at",
+        (job_id, topic["topic_id"], topic["path"], json.dumps(lesson), db.now()),
+    )
+
+
+def load_lesson(conn: psycopg.Connection, job_id: str, topic_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT topic_id, deck_path, lesson_json FROM lesson"
+        " WHERE job_id = %s AND topic_id = %s",
+        (job_id, topic_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "topic_id": row["topic_id"],
+        "deck_path": row["deck_path"],
+        **json.loads(row["lesson_json"]),
+    }
+
+
+def load_lessons(conn: psycopg.Connection, job_id: str) -> list[dict]:
+    """Every lesson for a job, in the order the plan put its topics.
+
+    Plan order, not creation order: topics are taught in dependency order and
+    they generate concurrently, so the order they finished in is meaningless.
+    """
+    rows = conn.execute(
+        "SELECT l.topic_id, l.deck_path, l.lesson_json FROM lesson l"
+        " JOIN topic t ON t.job_id = l.job_id AND t.topic_id = l.topic_id"
+        " WHERE l.job_id = %s ORDER BY t.position",
+        (job_id,),
+    ).fetchall()
+    return [
+        {
+            "topic_id": row["topic_id"],
+            "deck_path": row["deck_path"],
+            **json.loads(row["lesson_json"]),
+        }
+        for row in rows
+    ]
+
+
 def load_cards(conn: psycopg.Connection, job_id: str) -> list[Card]:
     # Cards are ordered by their topic's place in the plan, then by their own
     # place within the topic, so a re-run of one topic cannot reshuffle the deck.
