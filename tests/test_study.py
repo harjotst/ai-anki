@@ -307,3 +307,71 @@ def test_a_cloze_card_is_asked_rather_than_shown(client, claude):
     assert card["front"] == "Glycolysis happens in the {{c1::cytosol}}."
     assert card["rendered_front"] == "Glycolysis happens in the [...]."
     assert "cytosol" not in card["rendered_front"]
+
+
+# --- what the redesigned Today screen reads --------------------------------
+
+
+def test_activity_carries_the_per_day_history_the_heatmap_is_built_from(client, claude):
+    """The heatmap, the streak ring and banked rest days are all derived from
+    which days somebody studied. Totals alone cannot answer that."""
+    deck_id, _ = studied_deck(client, claude)
+    card = due(client, deck_id)[0]["card_uuid"]
+    for index, days_ago in enumerate([2, 2, 0]):
+        answer(
+            client, card, "good",
+            at=NOW - timedelta(days=days_ago), client_uuid=f"h{index}",
+        )
+
+    counted = client.get("/api/me/activity").json()
+
+    assert counted["reviews"] == 3
+    by_day = {entry["day"]: entry["reviews"] for entry in counted["days"]}
+    assert by_day[(NOW - timedelta(days=2)).date().isoformat()] == 2
+    assert by_day[NOW.date().isoformat()] == 1
+    # Days with nothing are absent rather than zero-filled: the client knows
+    # the calendar; the server only knows what happened.
+    assert (NOW - timedelta(days=1)).date().isoformat() not in by_day
+
+
+def test_every_due_card_says_what_each_rating_would_schedule(client, claude):
+    """The interval previews under the rating buttons.
+
+    Served from the same scheduler that will actually apply the rating, not
+    mirrored client-side — a mirror that drifted from the real parameters
+    would print numbers the next day proves wrong.
+    """
+    deck_id, _ = studied_deck(client, claude)
+
+    card = due(client, deck_id)[0]
+
+    previews = card["previews"]
+    assert set(previews) == {"again", "hard", "good", "easy"}
+    assert all(isinstance(v, str) and v for v in previews.values())
+
+    # And they are honest about order: a better answer never schedules sooner.
+    def minutes(text):
+        units = {"m": 1, "h": 60, "d": 1440, "mo": 43200}
+        for suffix in ["mo", "m", "h", "d"]:
+            if text.endswith(suffix):
+                return float(text[: -len(suffix)]) * units[suffix]
+        raise AssertionError(f"unparseable interval {text!r}")
+
+    assert minutes(previews["again"]) <= minutes(previews["hard"])
+    assert minutes(previews["hard"]) <= minutes(previews["good"])
+    assert minutes(previews["good"]) <= minutes(previews["easy"])
+
+
+def test_previews_reflect_the_cards_actual_history(client, claude):
+    """A mature card's Good is measured in days; a fresh card's in minutes."""
+    deck_id, _ = studied_deck(client, claude)
+    card = due(client, deck_id)[0]["card_uuid"]
+    for index, day in enumerate([0, 2, 6]):
+        answer(client, card, "easy", at=NOW + timedelta(days=day), client_uuid=f"m{index}")
+
+    matured = next(
+        c for c in due(client, deck_id, at=NOW + timedelta(days=400))
+        if c["card_uuid"] == card
+    )
+
+    assert matured["previews"]["good"].endswith(("d", "mo")), matured["previews"]

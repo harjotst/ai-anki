@@ -250,17 +250,19 @@ def studiable(conn: psycopg.Connection, account_id: str, card_uuid: str | None) 
 def due_cards(
     conn: psycopg.Connection, account_id: str, deck_id: str, at: datetime | None = None
 ) -> list[dict]:
+    moment = at or db.now()
     rows = conn.execute(
-        "SELECT s.card_uuid, s.state, s.due, s.stability, s.reps,"
+        "SELECT s.card_uuid, s.state, s.step, s.due, s.stability, s.difficulty,"
+        "       s.last_review, s.reps,"
         "       c.front, c.back, c.note_type, c.deck_path, c.topic_id"
         "  FROM study_card s"
         "  JOIN LATERAL (SELECT front, back, note_type, deck_path, topic_id FROM card"
         "                 WHERE card_uuid = s.card_uuid ORDER BY id DESC LIMIT 1) c ON TRUE"
         " WHERE s.account_id = %s AND s.deck_id = %s AND s.due <= %s"
         " ORDER BY s.due",
-        (account_id, deck_id, at or db.now()),
+        (account_id, deck_id, moment),
     ).fetchall()
-    return [_as_card(row) for row in rows]
+    return [{**_as_card(row), "previews": _previews(row, moment)} for row in rows]
 
 
 def deck_cards(conn: psycopg.Connection, account_id: str, deck_id: str) -> list[dict]:
@@ -343,10 +345,25 @@ def activity(conn: psycopg.Connection, account_id: str) -> dict:
         "  FROM review WHERE account_id = %s",
         (account_id,),
     ).fetchone()
+    # Per-day history, most recent first. The heatmap, the streak ring and
+    # banked rest days are all derived from which days somebody studied, and
+    # totals alone cannot answer that. Days with nothing are absent rather
+    # than zero-filled: the client knows the calendar; the server only knows
+    # what happened.
+    days = conn.execute(
+        "SELECT date_trunc('day', reviewed_at)::date AS day, COUNT(*) AS reviews"
+        "  FROM review WHERE account_id = %s"
+        " GROUP BY 1 ORDER BY 1 DESC LIMIT 120",
+        (account_id,),
+    ).fetchall()
     return {
         "reviews": row["reviews"],
         "cards_seen": row["cards_seen"],
         "days_studied": row["days_studied"],
+        "days": [
+            {"day": entry["day"].isoformat(), "reviews": entry["reviews"]}
+            for entry in days
+        ],
     }
 
 
@@ -374,6 +391,45 @@ def _as_card(row) -> dict:
         "stability": row["stability"],
         "reps": row["reps"],
     }
+
+
+def _previews(row, at: datetime) -> dict:
+    """What each answer would schedule, from the scheduler that will apply it.
+
+    Served rather than mirrored client-side: a mirror whose parameters drifted
+    from the real ones would print numbers the next day proves wrong, and a
+    wrong number under a rating button erodes trust in all of them.
+
+    Inside the same per-card fuzz seed as `rebuild`, so the preview is the
+    schedule the rating would actually produce, not an unfuzzed cousin of it.
+    """
+    def fresh():
+        if row["last_review"] is None or row["stability"] is None:
+            return Card()
+        return Card(
+            state=row["state"], step=row["step"], stability=row["stability"],
+            difficulty=row["difficulty"], due=row["due"], last_review=row["last_review"],
+        )
+
+    out = {}
+    with _fuzz_seeded_by(row["card_uuid"]):
+        for name, rating in RATINGS.items():
+            scheduled, _ = _scheduler.review_card(fresh(), rating, at)
+            out[name] = _humanize(scheduled.due - at)
+    return out
+
+
+def _humanize(delta) -> str:
+    minutes = max(1, round(delta.total_seconds() / 60))
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = round(minutes / 60)
+    if hours < 24:
+        return f"{hours}h"
+    days = round(hours / 24)
+    if days < 30:
+        return f"{days}d"
+    return f"{round(days / 30)}mo"
 
 
 def _retrievability(row, at: datetime) -> float:

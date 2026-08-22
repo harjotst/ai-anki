@@ -28,9 +28,14 @@ export const supabase = configured
 const DEV_TOKEN_KEY = "ai_anki_dev_token";
 
 export async function accessToken() {
-  if (!supabase) return window.localStorage.getItem(DEV_TOKEN_KEY);
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
+  if (supabase) {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.access_token) return data.session.access_token;
+  }
+  // The development fallback works whether or not an auth project is
+  // configured — the server verifies the signature either way, so a made-up
+  // value still gets a 401.
+  return window.localStorage.getItem(DEV_TOKEN_KEY);
 }
 
 export function signInWith(provider) {
