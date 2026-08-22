@@ -62,13 +62,28 @@ CARDS_SCHEMA = {
 }
 
 _STYLE = {
-    "easy": "Ask direct recall questions. One fact per card.",
+    "easy": "Ask direct recall questions.",
     "medium": "Mix recall with questions that require relating two facts.",
     "hard": (
         "Favour application, comparison, and cause-and-effect over definitions. "
-        "A card should test whether the material is understood, not merely seen."
+        "A card should test whether the material is understood, not merely seen. "
+        "Make the QUESTION harder, never the answer longer."
     ),
 }
+
+# Stated for every difficulty rather than only the easy one, because a harder
+# question is exactly what makes this rule easy to break. Measured on a real
+# 164-card run: 9% of answers packed three or more facts, all of them in hard
+# topics. A card whose answer is a list is never quite right and never quite
+# wrong, so it is graded 'again' for weeks and drags the schedule around it
+# down with it.
+_ATOMICITY = (
+    "\n\nEvery card tests ONE fact, and its answer is one fact long — a term, a "
+    "value, a mechanism, a single sentence. If an answer would need "
+    "\"and\", a comma-separated list, or more than about fifteen words, split it "
+    "into that many cards instead. Two sharp cards beat one card carrying "
+    "three facts, and count towards the target the same way.\n"
+)
 
 
 def existing_cards_block(existing: list[dict]) -> str:
@@ -115,6 +130,7 @@ def build_cards_request(
     instruction = (
         f"Generate cards for one topic only: {topic['path']}\n\n"
         f"Difficulty: {difficulty}. {_STYLE.get(difficulty, _STYLE['medium'])}\n"
+        f"{_ATOMICITY}"
         f"Target roughly {topic['proposed_card_count']} cards, and prefer "
         f"{topic['note_type']} note type where it fits the content.\n\n"
         "Cover only this topic. Do not generate cards for material that belongs "

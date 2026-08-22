@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel
 
 from app import auth
-from app import budget, db, generation, ingestion, jobs, ledger, packaging, planning, progress, providers
+from app import backup, budget, db, generation, ingestion, jobs, ledger, packaging, planning, progress, providers
 from app import worker as worker_module
 
 
@@ -48,9 +48,13 @@ def create_app(
     global_daily_budget_usd: float = budget.GLOBAL_DAILY_BUDGET_USD,
     login_delay_seconds: float = auth.FAILED_LOGIN_DELAY_SECONDS,
     lockout_seconds: float = auth.LOCKOUT_SECONDS,
+    # None means no off-platform copies. Tests pass one explicitly rather
+    # than reaching for the environment.
+    backup_destination: backup.Destination | None = None,
 ) -> FastAPI:
     db_path = Path(db_path)
     data_dir = Path(data_dir)
+    backup_destination = backup_destination or backup.destination_from_env()
     # A runtime secret, never baked in. Unset means nobody is the owner, which
     # shuts minting rather than opening it.
     owner_token = owner_token or os.environ.get("AI_ANKI_OWNER_TOKEN")
@@ -76,7 +80,20 @@ def create_app(
             jobs.recover_orphans(conn, worker.id)
         finally:
             conn.close()
+
+        # Nightly off-platform copies, if a bucket is configured. Absent
+        # configuration is a supported state: local development and a first
+        # deploy both run without one, and a task that raises every night is a
+        # task whose alarms get muted.
+        backups = None
+        if backup_destination is not None:
+            backups = asyncio.create_task(
+                backup.nightly(db_path, data_dir / "tmp", backup_destination)
+            )
+
         yield
+        if backups is not None:
+            backups.cancel()
         # The platform turns SIGTERM into a graceful shutdown, which arrives
         # here. Everything the drain does is bounded, because the kill that
         # follows is not negotiable.
@@ -361,16 +378,28 @@ def create_app(
         return {"sources_removed": removed}
 
     @app.post("/api/maintenance/backup")
-    async def backup(conn=Depends(get_conn)):
+    async def take_backup(conn=Depends(get_conn)):
         """Take a consistent copy while the application keeps running.
 
-        Platform volume snapshots are documented as not being a backup, and this
-        database is the one thing whose loss cannot be recovered by re-running
-        anything.
+        Off the platform when a bucket is configured, because a copy on the
+        same volume protects against nothing that actually happens. Onto the
+        volume otherwise, so the endpoint still does something useful before
+        object storage is set up.
         """
-        destination = data_dir / "backup.db"
-        written = db.backup_to(db_path, destination)
-        return {"path": str(destination), "bytes": written}
+        if backup_destination is not None:
+            result = await asyncio.to_thread(
+                backup.run, db_path, data_dir / "tmp", backup_destination
+            )
+            return {"destination": backup_destination.bucket, **result}
+        written = db.backup_to(db_path, data_dir / "backup.db")
+        return {
+            "path": str(data_dir / "backup.db"),
+            "bytes": written,
+            "warning": (
+                "on the same volume as the database it copies; set "
+                "AI_ANKI_BACKUP_BUCKET for an off-platform copy"
+            ),
+        }
 
     @app.get("/api/jobs/{job_id}/usage")
     async def read_usage(
