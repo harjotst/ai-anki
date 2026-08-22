@@ -1,0 +1,107 @@
+/* GENERATED from tokens.json by scripts/emit-tokens.mjs — do not hand-edit.
+ * Any hex literal outside the token files fails CI. */
+:root {
+  --bg: #FAF9F7;
+  --surface: #FFFFFF;
+  --sunken: #F1EFEA;
+  --border: #E3E1DA;
+  --border-strong: #C9C6BD;
+  --text: #1C1B18;
+  --text-2: #605D55;
+  --muted: #8B877D;
+  --accent: #0E7C66;
+  --accent-hover: #0A6353;
+  --accent-soft: #E3EFEB;
+  --on-accent: #FFFFFF;
+  --success: #33774F;
+  --success-soft: #E5F0E6;
+  --danger: #A83E36;
+  --danger-soft: #F8E9E7;
+  --warning: #96690F;
+  --warning-soft: #F5EDDA;
+  --heat-0: #EDEBE4;
+  --heat-1: #CFE4DD;
+  --heat-2: #9CCBBE;
+  --heat-3: #5BA893;
+  --heat-4: #0E7C66;
+  --shadow-sheet: 0 8px 24px rgba(0,0,0,0.18);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --type-stat-xl: 40px; --lh-stat-xl: 44px; --w-stat-xl: 650;
+  --type-display: 32px; --lh-display: 38px; --w-display: 650;
+  --type-title: 22px; --lh-title: 28px; --w-title: 620;
+  --type-heading: 17px; --lh-heading: 24px; --w-heading: 620;
+  --type-body: 16px; --lh-body: 24px; --w-body: 400;
+  --type-secondary: 14px; --lh-secondary: 20px; --w-secondary: 400;
+  --type-caption: 12px; --lh-caption: 16px; --w-caption: 500;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+  --target-min: 44px;
+  --target-rating: 48px;
+}
+
+/* Dark: the system preference, unless the person chose light explicitly. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --bg: #131311;
+  --surface: #1C1B18;
+  --sunken: #0D0D0B;
+  --border: #2B2A25;
+  --border-strong: #3E3C35;
+  --text: #ECEAE3;
+  --text-2: #A5A198;
+  --muted: #757168;
+  --accent: #3FBFA4;
+  --accent-hover: #5ACDB4;
+  --accent-soft: #17342D;
+  --on-accent: #0A1613;
+  --success: #6FBE8B;
+  --success-soft: #1A2C20;
+  --danger: #E0776C;
+  --danger-soft: #362019;
+  --warning: #D9AC55;
+  --warning-soft: #322A16;
+  --heat-0: #1E1D1A;
+  --heat-1: #1D3B33;
+  --heat-2: #23594C;
+  --heat-3: #2E8A73;
+  --heat-4: #3FBFA4;
+  --shadow-sheet: 0 8px 24px rgba(0,0,0,0.45);
+  }
+}
+/* The explicit choice, which beats the system either way. */
+:root[data-theme="dark"] {
+  --bg: #131311;
+  --surface: #1C1B18;
+  --sunken: #0D0D0B;
+  --border: #2B2A25;
+  --border-strong: #3E3C35;
+  --text: #ECEAE3;
+  --text-2: #A5A198;
+  --muted: #757168;
+  --accent: #3FBFA4;
+  --accent-hover: #5ACDB4;
+  --accent-soft: #17342D;
+  --on-accent: #0A1613;
+  --success: #6FBE8B;
+  --success-soft: #1A2C20;
+  --danger: #E0776C;
+  --danger-soft: #362019;
+  --warning: #D9AC55;
+  --warning-soft: #322A16;
+  --heat-0: #1E1D1A;
+  --heat-1: #1D3B33;
+  --heat-2: #23594C;
+  --heat-3: #2E8A73;
+  --heat-4: #3FBFA4;
+  --shadow-sheet: 0 8px 24px rgba(0,0,0,0.45);
+}

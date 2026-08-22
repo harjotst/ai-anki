@@ -171,14 +171,15 @@ def test_the_built_frontend_calls_every_endpoint_the_journey_needs():
     ):
         assert endpoint in built, f"the built UI never calls {endpoint}"
 
-    # Sign-in is the provider's, not ours, and the credential rides in a header
-    # rather than a cookie -- so a build that still posts a token to our own
-    # session endpoint is a build that did not get the change.
-    # Bulk review builds its path from the verb, so the literal never appears.
-    # Asserting on the shape instead of the whole string is the honest version:
-    # it still fails if the screen stops calling it at all.
-    assert "/cards/" in built
-    assert '"accept"' in built or "'accept'" in built
+    # The redesign inlines the bulk-review verbs into template literals, so the
+    # full paths appear in the bundle and can be asserted directly — stronger
+    # than the old shape check.
+    assert "cards/accept" in built
+    assert "cards/reject" in built
+    # And the study loop, which the redesign made the primary surface.
+    for endpoint in ("/api/reviews", "/due", "/mastery", "/api/leaderboard",
+                     "/api/me/activity", "/study"):
+        assert endpoint in built, f"the built UI never calls {endpoint}"
 
     assert "/api/session" not in built
     assert "signInWithOAuth" in built
