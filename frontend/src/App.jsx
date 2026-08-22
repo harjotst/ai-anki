@@ -154,7 +154,13 @@ function Home({ decks, jobs, onOpen, onStarted, onRenamed }) {
                 <button className="row" onClick={() => onOpen(job.job_id)}>
                   <span className="row-main">{job.source_filename || "upload"}</span>
                   <span className="muted small">
-                    {job.deck_name} · {STATE_LABEL[job.state] || job.state}
+                    {/* A deck is named after whatever file started it, so the
+                        first run in a deck would otherwise say its own name
+                        twice. */}
+                    {job.deck_name && job.deck_name !== job.source_filename
+                      ? `${job.deck_name} · `
+                      : ""}
+                    {STATE_LABEL[job.state] || job.state}
                     {job.card_count > 0 && ` · ${job.card_count} cards`}
                   </span>
                 </button>
@@ -607,16 +613,35 @@ function DownloadStep({ jobId, info, onBack }) {
                 />
                 Take this update
               </label>
-              <div className="was">
-                <span className="label muted small">In your collection</span>
-                <div>{update.existing_front}</div>
-                <div className="muted">{update.existing_back}</div>
-              </div>
-              <div className="now">
-                <span className="label muted small">Replacing it with</span>
-                <div>{update.proposed_front}</div>
-                <div className="muted">{update.proposed_back}</div>
-              </div>
+              {update.existing_front === update.proposed_front ? (
+                // The common case by far: a revision sharpens the answer and
+                // leaves the question alone. Showing the question twice makes
+                // the reader hunt for a difference that is not there.
+                <>
+                  <div className="asked">{update.existing_front}</div>
+                  <div className="was">
+                    <span className="label muted small">Answer now</span>
+                    <div>{update.existing_back}</div>
+                  </div>
+                  <div className="now">
+                    <span className="label muted small">Answer after</span>
+                    <div>{update.proposed_back}</div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="was">
+                    <span className="label muted small">In your collection</span>
+                    <div>{update.existing_front}</div>
+                    <div className="muted">{update.existing_back}</div>
+                  </div>
+                  <div className="now">
+                    <span className="label muted small">Replacing it with</span>
+                    <div>{update.proposed_front}</div>
+                    <div className="muted">{update.proposed_back}</div>
+                  </div>
+                </>
+              )}
             </div>
           ))}
         </>

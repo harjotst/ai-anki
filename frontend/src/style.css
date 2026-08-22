@@ -105,3 +105,4 @@ code { background: #f0eee9; padding: .1rem .35rem; border-radius: 4px; font-size
 .card.diff .label { display: block; text-transform: uppercase;
                     letter-spacing: .04em; font-size: .68rem; margin-bottom: .2rem; }
 .download a.primary { margin-right: .75rem; }
+.card.diff .asked { font-weight: 560; margin-bottom: .5rem; }
