@@ -39,11 +39,14 @@ def test_no_secret_is_baked_into_the_image():
         assert forbidden not in DOCKERFILE, f"{forbidden} must be a runtime secret"
 
 
-def test_the_volume_is_mounted_where_the_database_and_uploads_live():
+def test_the_volume_is_mounted_where_the_uploads_live():
     mount = FLY["mounts"][0]
     assert mount["destination"] == "/data"
-    assert FLY["env"]["AI_ANKI_DB_PATH"].startswith("/data")
     assert FLY["env"]["AI_ANKI_DATA_DIR"].startswith("/data")
+    # The database is not here any more. Baking a path for it into the config
+    # would be a path nothing reads, which is worse than absent -- somebody
+    # would eventually believe it.
+    assert "AI_ANKI_DB_PATH" not in FLY["env"]
     # Starlette spools large uploads to TMPDIR; on the default that is the slow
     # ephemeral rootfs rather than the volume.
     assert FLY["env"]["TMPDIR"].startswith("/data")
@@ -156,13 +159,27 @@ def test_the_built_frontend_calls_every_endpoint_the_journey_needs():
     built = max(bundles, key=lambda p: p.stat().st_mtime).read_text()
 
     for endpoint in (
-        "/api/session",       # sign in
-        "/api/jobs",          # upload
+        "/api/jobs",          # upload, and the job list
         "/plan",              # pass 1, and the edited-plan PUT
         "/generate",          # pass 2
         "/estimate",          # cost before approval
         "/cards",             # the review screen
         "/deck.apkg",         # download
         "/download-info",     # the Anki guidance
+        "/api/decks",         # the deck list and the continuation picker
+        "/diff",              # what downloading would change
     ):
         assert endpoint in built, f"the built UI never calls {endpoint}"
+
+    # Sign-in is the provider's, not ours, and the credential rides in a header
+    # rather than a cookie -- so a build that still posts a token to our own
+    # session endpoint is a build that did not get the change.
+    # Bulk review builds its path from the verb, so the literal never appears.
+    # Asserting on the shape instead of the whole string is the honest version:
+    # it still fails if the screen stops calling it at all.
+    assert "/cards/" in built
+    assert '"accept"' in built or "'accept'" in built
+
+    assert "/api/session" not in built
+    assert "signInWithOAuth" in built
+    assert "authorization" in built.lower()

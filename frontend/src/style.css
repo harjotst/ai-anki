@@ -106,3 +106,9 @@ code { background: #f0eee9; padding: .1rem .35rem; border-radius: 4px; font-size
                     letter-spacing: .04em; font-size: .68rem; margin-bottom: .2rem; }
 .download a.primary { margin-right: .75rem; }
 .card.diff .asked { font-weight: 560; margin-bottom: .5rem; }
+
+/* --- sign-in ----------------------------------------------------------- */
+.providers { display: flex; flex-direction: column; gap: .6rem; margin: 1.5rem 0 .5rem; }
+.providers button { width: 100%; padding: .7rem 1rem; }
+.signout { margin-top: 1rem; padding: 1rem 2rem; text-align: right; }
+button.primary { padding: .6rem 1.2rem; margin-right: .75rem; margin-bottom: .75rem; }

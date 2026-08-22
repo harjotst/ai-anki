@@ -1,55 +1,64 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
-const api = async (path, options = {}) => {
-  const response = await fetch(path, {
-    headers: { "content-type": "application/json" },
-    ...options,
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `${response.status} ${response.statusText}`);
-  }
-  return response.status === 204 ? null : response.json();
-};
+import {
+  api,
+  configured,
+  download,
+  signInWith,
+  signOut,
+  supabase,
+  upload,
+} from "./session";
 
 const money = (usd) => `$${Number(usd).toFixed(2)}`;
 const thousands = (n) => Number(n).toLocaleString();
 
 // --- sign in -------------------------------------------------------------
 
-function SignIn({ onSignedIn }) {
-  const [token, setToken] = useState("");
+function SignIn() {
   const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(null);
 
-  const submit = async (event) => {
-    event.preventDefault();
+  if (!configured)
+    return (
+      <div className="panel narrow">
+        <h1>ai-anki</h1>
+        <p className="error">Sign-in is not configured.</p>
+        <p className="muted small">
+          Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code>,
+          then rebuild the frontend.
+        </p>
+      </div>
+    );
+
+  const start = async (provider) => {
+    setBusy(provider);
     setError(null);
-    try {
-      const { person } = await api("/api/session", {
-        method: "POST",
-        body: JSON.stringify({ token: token.trim() }),
-      });
-      onSignedIn(person);
-    } catch (problem) {
-      setError(problem.message);
+    const { error: refused } = await signInWith(provider);
+    if (refused) {
+      setError(refused.message);
+      setBusy(null);
     }
+    // On success the browser leaves for the provider and comes back signed in,
+    // so there is nothing to do here.
   };
 
   return (
-    <form className="panel narrow" onSubmit={submit}>
+    <div className="panel narrow">
       <h1>ai-anki</h1>
-      <p className="muted">Paste the invite link you were sent.</p>
-      <input
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-        placeholder="invite token"
-        autoFocus
-      />
-      <button type="submit" disabled={!token.trim()}>
-        Sign in
-      </button>
+      <p className="muted">
+        Upload what you are studying. Get taught it, then drill it.
+      </p>
+      <div className="providers">
+        <button onClick={() => start("google")} disabled={!!busy}>
+          {busy === "google" ? "Opening Google…" : "Continue with Google"}
+        </button>
+        <button className="ghost" onClick={() => start("apple")} disabled={!!busy}>
+          {busy === "apple" ? "Opening Apple…" : "Continue with Apple"}
+        </button>
+      </div>
       {error && <p className="error">{error}</p>}
-    </form>
+    </div>
   );
 }
 
@@ -69,10 +78,7 @@ function Upload({ decks, onStarted }) {
       const body = new FormData();
       body.append("file", file);
       if (deckId) body.append("deck_id", deckId);
-      const response = await fetch("/api/jobs", { method: "POST", body });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.detail || "upload failed");
-      onStarted(payload.job_id);
+      onStarted((await upload("/api/jobs", body)).job_id);
     } catch (problem) {
       setError(problem.message);
     } finally {
@@ -132,7 +138,7 @@ const STATE_LABEL = {
   failed: "Failed",
 };
 
-function Home({ decks, jobs, onOpen, onStarted, onRenamed }) {
+function Home({ decks, jobs, onOpen, onStarted, onRenamed, onSignOut }) {
   const unfinished = jobs.filter((job) => !["complete", "reviewing"].includes(job.state));
 
   return (
@@ -180,6 +186,12 @@ function Home({ decks, jobs, onOpen, onStarted, onRenamed }) {
           </ul>
         </div>
       )}
+
+      <div className="panel narrow signout">
+        <button className="ghost" onClick={onSignOut}>
+          Sign out
+        </button>
+      </div>
     </>
   );
 }
@@ -560,9 +572,12 @@ function DownloadStep({ jobId, info, onBack }) {
         <p className="muted">
           This job has no earlier deck to compare against, so everything in it is new.
         </p>
-        <a className="primary" href={`/api/jobs/${jobId}/deck.apkg`} download>
+        <button
+          className="primary"
+          onClick={() => download(`/api/jobs/${jobId}/deck.apkg`, `${jobId.slice(0, 8)}.apkg`)}
+        >
           Download the deck
-        </a>
+        </button>
         <button className="ghost" onClick={onBack}>
           Back to the cards
         </button>
@@ -572,7 +587,7 @@ function DownloadStep({ jobId, info, onBack }) {
   if (!diff) return <div className="panel narrow muted">Working out what changes…</div>;
 
   const query = [...skipped].map((uuid) => `skip=${encodeURIComponent(uuid)}`).join("&");
-  const href = `/api/jobs/${jobId}/deck.apkg${query ? `?${query}` : ""}`;
+  const path = `/api/jobs/${jobId}/deck.apkg${query ? `?${query}` : ""}`;
   const taking = diff.counts.update - skipped.size;
 
   return (
@@ -650,9 +665,12 @@ function DownloadStep({ jobId, info, onBack }) {
       {diff.warning && <p className="muted small">{diff.warning}</p>}
 
       <div className="download">
-        <a className="primary" href={href} download>
+        <button
+          className="primary"
+          onClick={() => download(path, `${jobId.slice(0, 8)}.apkg`)}
+        >
           Download the deck
-        </a>
+        </button>
         {info && (
           <>
             <p className="muted small">{info.import_advice}</p>
@@ -740,7 +758,10 @@ function Card({ card, busy, picked, onPick, onSave, onReject, onReroll }) {
 // --- shell ---------------------------------------------------------------
 
 export default function App() {
-  const [person, setPerson] = useState(null);
+  // undefined while we are still asking the provider; null once we know there
+  // is nobody. Without the three states the sign-in screen flashes on every
+  // reload for somebody who is already signed in.
+  const [session, setSession] = useState(undefined);
   const [jobId, setJobId] = useState(
     new URLSearchParams(location.search).get("job")
   );
@@ -754,6 +775,18 @@ export default function App() {
   // fires the planning pass again every two seconds — an expensive loop.
   const planning = useRef(new Set());
 
+  useEffect(() => {
+    if (!supabase) {
+      setSession(null);
+      return undefined;
+    }
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    // Covers the return from the provider, a token refresh, and signing out in
+    // another tab.
+    const { data } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    return () => data.subscription.unsubscribe();
+  }, []);
+
   const loadHome = useCallback(async () => {
     try {
       const [decks, jobs] = await Promise.all([api("/api/decks"), api("/api/jobs")]);
@@ -765,8 +798,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!jobId) loadHome();
-  }, [jobId, person, loadHome]);
+    if (session && !jobId) loadHome();
+  }, [jobId, session, loadHome]);
 
   const goHome = useCallback(() => {
     setError(null);
@@ -812,15 +845,8 @@ export default function App() {
     if (jobId) history.replaceState(null, "", `?job=${jobId}`);
   }, [jobId]);
 
-  if (!person && !jobId && !home)
-    return (
-      <SignIn
-        onSignedIn={(who) => {
-          setPerson(who);
-          loadHome();
-        }}
-      />
-    );
+  if (session === undefined) return <div className="panel narrow muted">Loading…</div>;
+  if (!session) return <SignIn />;
 
   if (!jobId)
     return (
@@ -830,6 +856,11 @@ export default function App() {
         onOpen={setJobId}
         onStarted={setJobId}
         onRenamed={loadHome}
+        onSignOut={async () => {
+          await signOut();
+          setHome(null);
+          history.replaceState(null, "", "/");
+        }}
       />
     );
 
