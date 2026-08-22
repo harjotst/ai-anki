@@ -64,4 +64,14 @@ export const tokens = ${JSON.stringify(t, null, 2)} as const;
 export type Tokens = typeof tokens;
 `;
 writeFileSync(join(root, "src", "tokens.ts"), ts);
-console.log("emitted src/tokens.css and src/tokens.ts");
+
+// The same theme object into the phone app — the second renderer reads the
+// identical values or the two drift, which is the failure this file exists
+// to prevent.
+import { existsSync, mkdirSync } from "node:fs";
+const mobileTheme = join(dirname(root), "mobile", "src", "theme");
+if (existsSync(join(dirname(root), "mobile"))) {
+  mkdirSync(mobileTheme, { recursive: true });
+  writeFileSync(join(mobileTheme, "tokens.ts"), ts);
+}
+console.log("emitted src/tokens.css, src/tokens.ts and mobile theme");

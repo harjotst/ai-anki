@@ -11,18 +11,26 @@ import re
 from pathlib import Path
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
+MOBILE = Path(__file__).resolve().parent.parent / "mobile"
 
 # The only files allowed to hold a color. tokens.css and tokens.ts are
-# generated from tokens.json, which is the source of truth.
+# generated from tokens.json, which is the source of truth — the mobile
+# theme copy included, because it is emitted from the same source.
 TOKEN_FILES = {"tokens.json", "tokens.css", "tokens.ts"}
 
 HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 
 
 def source_files():
-    for path in (FRONTEND / "src").rglob("*"):
-        if path.suffix in {".js", ".jsx", ".ts", ".tsx", ".css", ".html"}:
-            yield path
+    """Both renderers. The rules exist because every screen ships twice;
+    checking one renderer would let the other rot."""
+    roots = [FRONTEND / "src"]
+    if (MOBILE / "src").exists():
+        roots.append(MOBILE / "src")
+    for root in roots:
+        for path in root.rglob("*"):
+            if path.suffix in {".js", ".jsx", ".ts", ".tsx", ".css", ".html"}:
+                yield path
 
 
 def test_no_hex_color_exists_outside_the_token_files():
@@ -75,3 +83,6 @@ def test_the_token_files_are_in_sync_with_their_source():
             assert value in css, f"{palette} value {value} missing from tokens.css"
     ts = (FRONTEND / "src" / "tokens.ts").read_text()
     assert source["color"]["dark"]["accent"] in ts
+    mobile_ts = MOBILE / "src" / "theme" / "tokens.ts"
+    if mobile_ts.exists():
+        assert mobile_ts.read_text() == ts, "mobile tokens.ts differs from the web's"
