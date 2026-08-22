@@ -112,3 +112,28 @@ code { background: #f0eee9; padding: .1rem .35rem; border-radius: 4px; font-size
 .providers button { width: 100%; padding: .7rem 1rem; }
 .signout { margin-top: 1rem; padding: 1rem 2rem; text-align: right; }
 button.primary { padding: .6rem 1.2rem; margin-right: .75rem; margin-bottom: .75rem; }
+
+/* --- lessons ----------------------------------------------------------- */
+.topics { display: flex; flex-wrap: wrap; gap: .35rem; margin: 1.25rem 0 1.75rem;
+          padding-bottom: 1.25rem; border-bottom: 1px solid var(--line); }
+.topic { display: flex; align-items: center; gap: .4rem;
+         padding: .3rem .6rem; font-size: .85rem;
+         background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.topic:hover { color: var(--ink); }
+.topic.current { background: var(--accent); color: #fff; border-color: var(--accent); }
+.topic .n { font-variant-numeric: tabular-nums; opacity: .6; }
+.topic.current .n { opacity: .8; }
+
+.lesson { max-width: 40rem; }
+.lesson p { margin: 0 0 .9rem; }
+.lesson .lede { font-size: 1.15rem; line-height: 1.5; font-weight: 500; margin-bottom: 1.5rem; }
+.lesson h3 { margin-top: 2rem; border: 0; display: block; font-size: 1.05rem; }
+.lesson .builds-on { margin-top: -.35rem; font-style: italic; }
+.lesson .worked { padding: 1rem 1.2rem; background: #f3f1ec; border-radius: 8px; }
+.lesson .worked h3 { margin-top: 0; }
+.lesson .worked .problem { font-weight: 560; }
+.misconception { padding: .75rem 0 .75rem 1rem; margin-bottom: .9rem;
+                 border-left: 3px solid var(--accent); }
+.misconception .belief { font-weight: 560; margin-bottom: .35rem; }
+.checks { margin: 0; padding-left: 1.2rem; }
+.checks li { margin-bottom: .5rem; }

@@ -20,8 +20,15 @@ export const supabase = configured
     })
   : null;
 
+// A token pasted into local storage, used only when no auth project is
+// configured. This is not a way in: the server verifies the signature against
+// the issuer's published keys either way, so a made-up value gets a 401. It
+// exists so the application can be driven locally against a development signing
+// key without standing up a whole auth project.
+const DEV_TOKEN_KEY = "ai_anki_dev_token";
+
 export async function accessToken() {
-  if (!supabase) return null;
+  if (!supabase) return window.localStorage.getItem(DEV_TOKEN_KEY);
   const { data } = await supabase.auth.getSession();
   return data.session?.access_token ?? null;
 }
