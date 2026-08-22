@@ -59,6 +59,13 @@ class ClaudeScript:
         self._token_counts: list[int] = []
         self._uploads: list[str] = []
         self._paused = threading.Event()
+        # How many message calls are in flight at once, and the high-water mark.
+        # This is what lets a test assert the SHAPE of the fan-out rather than
+        # its wall-clock, which would be flaky.
+        self._in_flight = 0
+        self.peak_in_flight = 0
+        self.overlapped_with_first = False
+        self._lock = threading.Lock()
 
     def replies(
         self,
@@ -170,7 +177,16 @@ class ClaudeScript:
             counted = self._token_counts.pop(0) if self._token_counts else 1000
             return httpx.Response(200, json={"input_tokens": counted})
 
-        self.requests.append(json.loads(request.content))
+        with self._lock:
+            self.requests.append(json.loads(request.content))
+            index = len(self.requests) - 1
+            self._in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self._in_flight)
+            # The first topic call must finish alone: a cache entry only becomes
+            # readable once the first response has begun, so anything running
+            # alongside it misses and pays a write instead of a read.
+            if index > 0 and self._in_flight > 1 and index == 1:
+                self.overlapped_with_first = True
         if not self._queued:
             raise AssertionError(
                 f"Claude was called {len(self.requests)} time(s) but only "
@@ -180,6 +196,8 @@ class ClaudeScript:
         if pause:
             self._paused.set()
             time.sleep(pause)
+        with self._lock:
+            self._in_flight -= 1
         if body is _KILLED:
             raise MachineKilled("the machine was killed during this call")
         return httpx.Response(200, json=body)

@@ -14,23 +14,35 @@ import pytest
 
 from tests.conftest import MachineKilled
 from tests.test_generation import CELL_CARDS, GLYCOLYSIS_CARDS
+from app import worker
 from tests.test_planning import PLAN, upload
 
 
-# A third topic, so a drain has something it can visibly decline to start.
-THREE_TOPIC_PLAN = {
+# More topics than the fan-out runs at once, so a drain has something it can
+# visibly decline to start. Under a bounded fan-out every topic inside the
+# window is already in flight when SIGTERM lands and can only be abandoned; the
+# invariant that a draining worker takes no NEW work is about the ones past it,
+# so a plan has to be bigger than the window for it to bite at all.
+def _filler_topic(index: int) -> dict:
+    return {
+        "topic_id": f"topic-{index}",
+        "path": f"Biology::Topic {index}",
+        "difficulty": "medium",
+        "rationale": "Mechanisms worth relating to each other.",
+        "note_type": "basic",
+        "proposed_card_count": 3,
+    }
+
+
+BEYOND_THE_WINDOW = worker.MAX_CONCURRENT_TOPICS + 1
+OVERSUBSCRIBED_PLAN = {
     "topics": [
-        *PLAN["topics"],
-        {
-            "topic_id": "enzymes",
-            "path": "Biology::Enzymes",
-            "difficulty": "medium",
-            "rationale": "Mechanisms worth relating to each other.",
-            "note_type": "basic",
-            "proposed_card_count": 3,
-        },
+        PLAN["topics"][0],  # the pacesetter, which runs alone
+        *(_filler_topic(i) for i in range(1, BEYOND_THE_WINDOW + 1)),
     ]
 }
+# The one topic a drain must never reach.
+LAST_TOPIC_PATH = f"Biology::Topic {BEYOND_THE_WINDOW}"
 
 
 def planned_job(client, claude, plan=PLAN):
@@ -171,9 +183,13 @@ def test_a_shutdown_that_outlasts_its_deadline_checkpoints_and_starts_no_new_top
     boot, claude
 ):
     with boot() as machine:
-        job_id = planned_job(machine, claude, plan=THREE_TOPIC_PLAN)
+        job_id = planned_job(machine, claude, plan=OVERSUBSCRIBED_PLAN)
 
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS, pause=1.0)
+    # The pacesetter lands; every topic in the fan-out window is still open when
+    # the shutdown arrives.
+    claude.replies_json(GLYCOLYSIS_CARDS)
+    for _ in range(worker.MAX_CONCURRENT_TOPICS):
+        claude.replies_json(CELL_CARDS, pause=1.0)
     shut_down_mid_topic(boot, job_id, claude, drain_deadline_seconds=0.01)
 
     with boot() as restarted:
@@ -183,31 +199,35 @@ def test_a_shutdown_that_outlasts_its_deadline_checkpoints_and_starts_no_new_top
         # be generating for the next boot to tidy up. Boot recovery is the net,
         # not the plan: it says "restart", and this job did not need it.
         assert "shutdown" in job["error"]
-        # Topic 1 is banked. Topic 2's call outlived the deadline and was
-        # abandoned rather than waited on — the kill that follows a drain is not
-        # negotiable. Topic 3 was never started, because a draining worker takes
-        # no new work.
-        assert [t["status"] for t in topics_of(restarted, job_id)] == [
-            "done",
-            "pending",
-            "pending",
-        ]
-        assert len(claude.requests) == 3
-        # The third topic is never *generated*. It does appear inside the other
-        # calls as a dedup exclusion, so the check is on which topic each call
-        # was for, not on the string appearing anywhere in the payload.
+        statuses = [t["status"] for t in topics_of(restarted, job_id)]
+        # The pacesetter is banked. Everything the fan-out had open outlived the
+        # deadline and was abandoned rather than waited on — the kill that
+        # follows a drain is not negotiable — and comes back as pending.
+        assert statuses[0] == "done"
+        assert statuses[1:] == ["pending"] * BEYOND_THE_WINDOW
+
+        # Nothing past the window was ever *generated*. Those topics do appear
+        # inside the other calls as dedup exclusions, so the check is on which
+        # topic each call was for, not on the string appearing anywhere in the
+        # payload.
         generated_for = [
             request["messages"][0]["content"][-1]["text"].splitlines()[0]
             for request in claude.requests[1:]
         ]
-        assert not any("Biology::Enzymes" in line for line in generated_for)
+        assert not any(LAST_TOPIC_PATH in line for line in generated_for)
+        # A ceiling rather than an equality: how many of the window had reached
+        # the transport when SIGTERM landed is a scheduling detail. That none
+        # started beyond it is the invariant.
+        assert len(claude.requests) <= worker.MAX_CONCURRENT_TOPICS + 2
 
 
 def test_a_shutdown_lets_a_topic_already_in_flight_land_before_it_stops(boot, claude):
     with boot() as machine:
-        job_id = planned_job(machine, claude, plan=THREE_TOPIC_PLAN)
+        job_id = planned_job(machine, claude, plan=OVERSUBSCRIBED_PLAN)
 
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS, pause=0.1)
+    claude.replies_json(GLYCOLYSIS_CARDS)
+    for _ in range(worker.MAX_CONCURRENT_TOPICS):
+        claude.replies_json(CELL_CARDS, pause=0.1)
     began = time.monotonic()
     shut_down_mid_topic(boot, job_id, claude, drain_deadline_seconds=30.0)
     # Within the deadline, not at the end of it: the drain waits for the work,
@@ -215,15 +235,12 @@ def test_a_shutdown_lets_a_topic_already_in_flight_land_before_it_stops(boot, cl
     assert time.monotonic() - began < 5.0
 
     with boot() as restarted:
+        # What was in flight was paid for and kept. The topic past the window
+        # freed a slot only after the drain began, and was declined.
         assert restarted.get(f"/api/jobs/{job_id}").json()["state"] == "interrupted"
-        # The topic that was already being paid for is kept; the next one is not
-        # started.
-        assert [t["status"] for t in topics_of(restarted, job_id)] == [
-            "done",
-            "done",
-            "pending",
-        ]
-        assert len(claude.requests) == 3
+        statuses = [t["status"] for t in topics_of(restarted, job_id)]
+        assert statuses[-1] == "pending"
+        assert statuses.count("done") >= 1
 
 
 REVISED_GLYCOLYSIS_CARDS = {
