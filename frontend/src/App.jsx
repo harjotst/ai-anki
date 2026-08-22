@@ -378,6 +378,121 @@ function PlanEditor({ jobId, plan, onApproved }) {
   );
 }
 
+// --- learning it, before drilling it -------------------------------------
+
+function Lessons({ jobId, onReview }) {
+  const [lessons, setLessons] = useState(null);
+  const [open, setOpen] = useState(0);
+
+  useEffect(() => {
+    api(`/api/jobs/${jobId}/lessons`)
+      .then((body) => setLessons(body.lessons))
+      .catch(() => setLessons([]));
+  }, [jobId]);
+
+  if (!lessons) return <div className="panel narrow muted">Loading…</div>;
+  if (!lessons.length) return <CardReview jobId={jobId} onDone={onReview} />;
+
+  const lesson = lessons[open];
+
+  return (
+    <div className="panel">
+      <h2>Learn it first</h2>
+      <p className="muted">
+        The cards are here to keep this in your memory, not to put it there. Read
+        the topic, then drill it.
+      </p>
+
+      <nav className="topics">
+        {lessons.map((entry, index) => (
+          <button
+            key={entry.topic_id}
+            className={index === open ? "topic current" : "topic"}
+            onClick={() => setOpen(index)}
+          >
+            <span className="n">{index + 1}</span>
+            {entry.deck_path.split("::").pop()}
+          </button>
+        ))}
+      </nav>
+
+      <article className="lesson">
+        <p className="lede">{lesson.in_one_line}</p>
+
+        <h3>Why it matters</h3>
+        <p>{lesson.why_it_matters}</p>
+
+        {lesson.sections.map((section) => (
+          <section key={section.heading}>
+            <h3>{section.heading}</h3>
+            {section.builds_on && (
+              <p className="muted small builds-on">
+                Builds on: {section.builds_on}
+              </p>
+            )}
+            {section.body.split("\n\n").map((paragraph, index) => (
+              <p key={index}>{paragraph}</p>
+            ))}
+          </section>
+        ))}
+
+        {lesson.worked_example && (
+          <section className="worked">
+            <h3>Worked example</h3>
+            <p className="problem">{lesson.worked_example.problem}</p>
+            <p>{lesson.worked_example.walkthrough}</p>
+          </section>
+        )}
+
+        {lesson.misconceptions.length > 0 && (
+          <section>
+            <h3>What people get wrong</h3>
+            {/* The part a textbook does badly, and the reason a card stops
+                being failed for six weeks. */}
+            {lesson.misconceptions.map((item) => (
+              <div key={item.belief} className="misconception">
+                <p className="belief">{item.belief}</p>
+                <p className="muted">{item.why_it_is_wrong}</p>
+              </div>
+            ))}
+          </section>
+        )}
+
+        {lesson.check_yourself.length > 0 && (
+          <section>
+            <h3>Check yourself</h3>
+            <ul className="checks">
+              {lesson.check_yourself.map((question) => (
+                <li key={question}>{question}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </article>
+
+      <div className="actions">
+        <button
+          className="ghost"
+          disabled={open === 0}
+          onClick={() => setOpen(open - 1)}
+        >
+          Previous
+        </button>
+        {open < lessons.length - 1 ? (
+          <button onClick={() => setOpen(open + 1)}>
+            Next: {lessons[open + 1].deck_path.split("::").pop()}
+          </button>
+        ) : (
+          <button onClick={onReview}>Review the cards</button>
+        )}
+        <button className="ghost" onClick={onReview}>
+          Skip to the cards
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // --- the card checkpoint -------------------------------------------------
 
 function CardReview({ jobId, onDone }) {
@@ -767,6 +882,9 @@ export default function App() {
   );
   const [job, setJob] = useState(null);
   const [error, setError] = useState(null);
+  // Teaching comes first; the cards are what reinforce it. This flips once the
+  // reader is done with the lessons, or says they would rather skip them.
+  const [reviewing, setReviewing] = useState(false);
   // What this person already has. Loaded once past the door and refreshed
   // whenever they come back to it: the home screen is the only handle on a run
   // once its tab is gone.
@@ -777,7 +895,11 @@ export default function App() {
 
   useEffect(() => {
     if (!supabase) {
-      setSession(null);
+      // No auth project configured. A development token in local storage still
+      // gets past the door, because the server verifies it properly regardless.
+      setSession(
+        window.localStorage.getItem("ai_anki_dev_token") ? { local: true } : null
+      );
       return undefined;
     }
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -879,7 +1001,11 @@ export default function App() {
     return <PlanEditor jobId={jobId} plan={job.plan} onApproved={() => setJob(null)} />;
 
   if (["complete", "reviewing"].includes(job.state))
-    return <CardReview jobId={jobId} onDone={goHome} />;
+    return reviewing ? (
+      <CardReview jobId={jobId} onDone={goHome} />
+    ) : (
+      <Lessons jobId={jobId} onReview={() => setReviewing(true)} />
+    );
 
   return (
     <div className="panel narrow">

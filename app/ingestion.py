@@ -209,14 +209,29 @@ def cost_of(call: dict, prices=None) -> float:
     )
 
 
-def estimate_cost(input_tokens: int, *, topics: int = ASSUMED_TOPICS) -> float:
+# Every topic is both taught and drilled, and the two are separate calls with
+# separate JSON schemas -- which means separate prompt-cache lineages, each
+# needing its own write before the rest of its calls can read. Quoting one pass
+# when two will run is a quote that is wrong by half, at the exact moment
+# somebody is deciding whether to spend it.
+PASSES_PER_TOPIC = 2
+
+
+def estimate_cost(
+    input_tokens: int,
+    *,
+    topics: int = ASSUMED_TOPICS,
+    passes_per_topic: int = PASSES_PER_TOPIC,
+) -> float:
     """What a job of this size is expected to cost, end to end.
 
-    Pass 1 writes the document into the cache; every topic call then reads it.
-    That read multiplier is the whole reason the two passes share a prefix — at
-    full price, a topic fan-out would cost more than the plan did.
+    Each pass writes the document into the cache once and then reads it for
+    every topic. That read multiplier is the whole reason a pass shares a prefix
+    with itself — at full price, a topic fan-out would cost more than the plan
+    did — and the reason the write is counted per pass rather than once: two
+    schemas cannot share one cache entry.
     """
-    write = input_tokens * CACHE_WRITE_MULTIPLIER * INPUT_PER_MTOK / 1_000_000
-    reads = topics * input_tokens * CACHE_READ_MULTIPLIER * INPUT_PER_MTOK / 1_000_000
-    output = ASSUMED_OUTPUT_TOKENS * OUTPUT_PER_MTOK / 1_000_000
-    return round(write + reads + output, 4)
+    per_pass_write = input_tokens * CACHE_WRITE_MULTIPLIER * INPUT_PER_MTOK / 1_000_000
+    per_pass_reads = topics * input_tokens * CACHE_READ_MULTIPLIER * INPUT_PER_MTOK / 1_000_000
+    output = passes_per_topic * ASSUMED_OUTPUT_TOKENS * OUTPUT_PER_MTOK / 1_000_000
+    return round(passes_per_topic * (per_pass_write + per_pass_reads) + output, 4)

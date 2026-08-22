@@ -26,6 +26,7 @@ depends_on = None
 TABLES = (
     "api_call",
     "job_event",
+    "lesson",
     "card",
     "topic",
     "source",

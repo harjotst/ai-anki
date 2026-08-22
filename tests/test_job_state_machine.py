@@ -110,7 +110,7 @@ def test_a_resume_runs_only_the_topics_that_did_not_finish(boot, claude):
 
     claude.replies_json(GLYCOLYSIS_CARDS).dies()
     generate_until_killed(boot, job_id)
-    spent = len(claude.requests)
+    spent = len(claude.calls_for("cards"))
 
     claude.replies_json(CELL_CARDS)
     with boot(resume_backoff_seconds=0) as restarted:
@@ -119,10 +119,12 @@ def test_a_resume_runs_only_the_topics_that_did_not_finish(boot, claude):
         assert response.status_code == 200
         assert restarted.get(f"/api/jobs/{job_id}").json()["state"] == "complete"
 
-        # One call, for the one topic that had not finished. Re-running the
-        # finished one would re-bill the user for work they already paid for.
-        assert len(claude.requests) == spent + 1
-        resumed = claude.requests[-1]["messages"][0]["content"][-1]["text"]
+        # One cards call, for the one topic that had not finished. Re-running
+        # the finished one would re-bill the user for work they already paid
+        # for. Counted by kind, because the resumed topic is also taught again
+        # -- its lesson never landed either.
+        assert len(claude.calls_for("cards")) == spent + 1
+        resumed = claude.calls_for("cards")[-1]["messages"][0]["content"][-1]["text"]
         # The instruction opens by naming the one topic being generated. Other
         # topics appear further down as exclusions — that is the cross-topic
         # dedup partition, not a second topic being re-run.
@@ -206,19 +208,23 @@ def test_a_shutdown_that_outlasts_its_deadline_checkpoints_and_starts_no_new_top
         assert statuses[0] == "done"
         assert statuses[1:] == ["pending"] * BEYOND_THE_WINDOW
 
-        # Nothing past the window was ever *generated*. Those topics do appear
-        # inside the other calls as dedup exclusions, so the check is on which
-        # topic each call was for, not on the string appearing anywhere in the
-        # payload.
-        generated_for = [
+        # Nothing past the window was ever *taught or generated*. Those topics
+        # do appear inside the other calls as dedup exclusions, so the check is
+        # on which topic each call was for, not on the string appearing
+        # anywhere in the payload.
+        worked_on = [
             request["messages"][0]["content"][-1]["text"].splitlines()[0]
             for request in claude.requests[1:]
         ]
-        assert not any(LAST_TOPIC_PATH in line for line in generated_for)
+        assert not any(LAST_TOPIC_PATH in line for line in worked_on)
         # A ceiling rather than an equality: how many of the window had reached
         # the transport when SIGTERM landed is a scheduling detail. That none
         # started beyond it is the invariant.
-        assert len(claude.requests) <= worker.MAX_CONCURRENT_TOPICS + 2
+        #
+        # The pacesetter plus one full window. It runs alone first -- which is
+        # what warms both cache lineages -- and only then do the rest fan out,
+        # so the most that can ever be in flight is one more than the window.
+        assert len(claude.calls_for("cards")) <= worker.MAX_CONCURRENT_TOPICS + 1
 
 
 def test_a_shutdown_lets_a_topic_already_in_flight_land_before_it_stops(boot, claude):
@@ -263,12 +269,12 @@ def test_a_failed_topic_is_the_only_one_retried_and_the_job_then_completes(boot,
         failed = machine.get(f"/api/jobs/{job_id}").json()
         assert failed["state"] == "failed"
         assert [t["status"] for t in topics_of(machine, job_id)] == ["done", "failed"]
-        spent = len(claude.requests)
+        spent = len(claude.calls_for("cards"))
 
         claude.replies_json(CELL_CARDS)
         machine.post(f"/api/jobs/{job_id}/generate")
 
-        assert len(claude.requests) == spent + 1
+        assert len(claude.calls_for("cards")) == spent + 1
         assert machine.get(f"/api/jobs/{job_id}").json()["state"] == "complete"
         assert [t["attempt_count"] for t in topics_of(machine, job_id)] == [1, 2]
         assert len(machine.get(f"/api/jobs/{job_id}/cards").json()["cards"]) == 3

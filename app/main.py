@@ -546,6 +546,27 @@ def create_app(
                 headers={"retry-after": str(int(exc.retry_after) + 1)},
             ) from exc
 
+    @app.get("/api/jobs/{job_id}/lessons")
+    async def read_lessons(
+        job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
+    ):
+        """Everything this job taught, in the order the plan put its topics."""
+        owned_job(conn, job_id, account.id)
+        return {"job_id": job_id, "lessons": jobs.load_lessons(conn, job_id)}
+
+    @app.get("/api/jobs/{job_id}/topics/{topic_id}/lesson")
+    async def read_lesson(
+        job_id: str,
+        topic_id: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        owned_job(conn, job_id, account.id)
+        lesson = jobs.load_lesson(conn, job_id, topic_id)
+        if lesson is None:
+            raise HTTPException(status_code=404, detail="this topic has not been taught yet")
+        return lesson
+
     @app.get("/api/jobs/{job_id}/cards")
     async def read_cards(job_id: str, conn=Depends(get_conn)):
         if jobs.load_job(conn, job_id) is None:

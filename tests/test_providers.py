@@ -234,6 +234,15 @@ class FakeVendor:
 
     def send(self, request):
         self.sent.append(request)
+        # Every topic is taught before it is drilled. These tests are about the
+        # provider abstraction rather than about lessons, so a lesson call is
+        # answered from stock instead of having to be scripted -- the same
+        # arrangement the Anthropic fake uses, for the same reason.
+        if "sections" in (request["shape"].get("properties") or {}):
+            return Reply(
+                data=STOCK_LESSON,
+                usage=Usage(input_tokens=10, cache_read_tokens=5_000, output_tokens=100),
+            )
         if not self.scripted:
             raise AssertionError("FakeVendor was called more times than it was scripted")
         return Reply(
@@ -241,6 +250,8 @@ class FakeVendor:
             usage=Usage(input_tokens=10, cache_read_tokens=5_000, output_tokens=100),
         )
 
+
+from tests.conftest import STOCK_LESSON
 
 PLAN = {
     "topics": [{
@@ -304,10 +315,12 @@ def test_the_pipeline_sends_the_vendors_own_request_shape(vendor_client):
 
     client.post(f"/api/jobs/{job_id}/generate")
 
-    # BOTH passes, not just the first. An earlier version of this test only
+    # EVERY pass, not just the first. An earlier version of this test only
     # checked the planning call and missed that the generation pass was still
-    # building an Anthropic-shaped request by hand.
-    assert len(vendor.sent) == 2
+    # building an Anthropic-shaped request by hand. Three now: plan, lesson,
+    # cards -- and the lesson pass is exactly the kind of addition that could
+    # have quietly reintroduced the bug.
+    assert len(vendor.sent) == 3
     for sent in vendor.sent:
         assert set(sent) == {"engine", "preamble", "payload", "shape", "ceiling"}
         assert "output_config" not in sent and "messages" not in sent
@@ -315,8 +328,10 @@ def test_the_pipeline_sends_the_vendors_own_request_shape(vendor_client):
         # varying instruction last.
         assert sent["payload"][0]["label"] == "lecture.txt"
 
-    assert "deck plan" in vendor.sent[0]["payload"][-1]["say"]
-    assert "one topic only" in vendor.sent[1]["payload"][-1]["say"]
+    plan_call, lesson_call, cards_call = vendor.sent
+    assert "deck plan" in plan_call["payload"][-1]["say"]
+    assert "Teach one topic" in lesson_call["payload"][-1]["say"]
+    assert "one topic only" in cards_call["payload"][-1]["say"]
 
 
 def test_cost_is_billed_at_the_active_providers_rates_not_anthropics(vendor_client):
@@ -330,9 +345,10 @@ def test_cost_is_billed_at_the_active_providers_rates_not_anthropics(vendor_clie
     client.post(f"/api/jobs/{job_id}/generate")
 
     usage = client.get(f"/api/jobs/{job_id}/usage").json()
-    # Two calls, each: 10 in @ $0.10 + 5,000 cached @ $0.01 + 100 out @ $0.40
-    #               = $0.000001 + $0.00005 + $0.00004 = $0.000091
-    assert abs(usage["total_cost_usd"] - 2 * 0.000091) < 1e-6
+    # Three calls -- plan, lesson, cards -- each: 10 in @ $0.10
+    #   + 5,000 cached @ $0.01 + 100 out @ $0.40
+    #   = $0.000001 + $0.00005 + $0.00004 = $0.000091
+    assert abs(usage["total_cost_usd"] - 3 * 0.000091) < 1e-6
     assert all(call["model"] == "fake-1" for call in usage["calls"])
 
 
