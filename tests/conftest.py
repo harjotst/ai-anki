@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+import uuid as _uuid
 
 import anthropic
 import httpx
@@ -272,3 +273,36 @@ def client(boot):
     """
     with boot() as c:
         yield c
+
+
+# --- Postgres ------------------------------------------------------------
+#
+# One container for the whole session, and a fresh schema per test. A
+# transaction-rollback fixture would be faster and would break every test whose
+# code commits -- which is every test that touches the worker, since a
+# checkpoint that rolls back is not a checkpoint.
+
+
+@pytest.fixture(scope="session")
+def pg_container():
+    from testcontainers.community.postgres import PostgresContainer
+
+    with PostgresContainer("postgres:16-alpine") as container:
+        yield container
+
+
+@pytest.fixture
+def pg_dsn(pg_container):
+    import psycopg
+
+    base = pg_container.get_connection_url().replace("postgresql+psycopg2://", "postgresql://")
+    schema = "t_" + _uuid.uuid4().hex[:16]
+    admin = psycopg.connect(base, autocommit=True)
+    admin.execute(f'CREATE SCHEMA "{schema}"')
+    admin.close()
+    try:
+        yield f"{base}?options=-csearch_path%3D{schema}"
+    finally:
+        admin = psycopg.connect(base, autocommit=True)
+        admin.execute(f'DROP SCHEMA "{schema}" CASCADE')
+        admin.close()

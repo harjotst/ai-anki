@@ -37,6 +37,10 @@ dev = [
     # Pinned exactly: the contract tests characterise ONE version's import
     # behaviour, so the pin must move deliberately, never by resolution drift.
     "anki==26.8.1",
+    # The datastore under the tests is a real Postgres in a container, not a
+    # stand-in. A fake would let a query pass here that the real server rejects.
+    "psycopg[binary]>=3.2",
+    "testcontainers[postgres]>=4.8",
 ]
 
 [build-system]
