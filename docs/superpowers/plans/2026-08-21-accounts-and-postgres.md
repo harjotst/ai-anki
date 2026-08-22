@@ -11,7 +11,7 @@
 
 **Architecture:** The datastore moves first (tasks 1–5), then identity (tasks 6–9). Every task ends with the full suite green. The 219 existing tests drive HTTP rather than SQL, so they are the specification of "generation still works"; a test that needs rewriting is a test that was coupled to SQLite, and that coupling is the defect.
 
-**Tech Stack:** psycopg 3, testcontainers-python, Postgres 16, Supabase Auth (JWKS), PyJWT, FastAPI.
+**Tech Stack:** psycopg 3, testcontainers-python, Postgres 17, Supabase Auth (JWKS), PyJWT, FastAPI.
 
 ## Global Constraints
 

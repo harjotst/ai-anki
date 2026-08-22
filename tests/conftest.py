@@ -459,7 +459,10 @@ def client(boot):
 def pg_container():
     from testcontainers.community.postgres import PostgresContainer
 
-    with PostgresContainer("postgres:16-alpine") as container:
+    # 17, matching what the project actually runs. Testing against a different
+    # major than production is how a behaviour difference reaches a user before
+    # it reaches a test.
+    with PostgresContainer("postgres:17-alpine") as container:
         yield container
 
 

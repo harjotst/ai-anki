@@ -76,10 +76,11 @@ Supabase issues a JWT. FastAPI verifies it and resolves an account.
 
 - Verify with **JWKS** (asymmetric), not the shared HS256 secret. A leaked shared secret
   mints valid tokens for every user; a leaked public key does nothing.
-  ⚠️ **Unverified:** whether the project issues asymmetric keys by default, and the JWKS
-  endpoint's exact path, are taken from memory rather than from Supabase's documentation.
-  Both are checked against the real project in step 5 before anything depends on them. If
-  only HS256 is available, the secret goes in Fly secrets and this note records why.
+  ✅ **Verified against the live project on 2026-08-22.** The endpoint is
+  `{issuer}/.well-known/jwks.json`, which is exactly what `identity.from_env` builds by
+  default. The published key is **ES256** — an elliptic-curve key, not RSA — which
+  `verify` already accepts. Checked further than "it parses": a token signed with a
+  different key but carrying the project's genuine `kid` is refused.
 - Cache the JWKS in-process with a bounded TTL and refetch on an unknown `kid`, so key
   rotation does not require a deploy.
 - The bearer token comes from the `Authorization` header. **The session cookie is
@@ -239,8 +240,8 @@ work.
 
 ## Open questions
 
-- **Which Postgres extensions are wanted at creation time?** `pgcrypto` and `uuid-ossp`
-  are near-certain. Deferred to the plan; they are cheap to add and awkward to add later
-  on a busy table.
+- ~~**Which Postgres extensions are wanted at creation time?**~~ ✅ Both `pgcrypto` and
+  `uuid-ossp` are installed by Supabase already, along with `pg_stat_statements` and
+  `supabase_vault`. Nothing to add.
 - **Does the web client keep polling, or move to Supabase Realtime?** Polling works and
   is not this spec's problem. Revisit when the Expo client lands.

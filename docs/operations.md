@@ -171,6 +171,33 @@ To call an admin endpoint by hand, take the access token from the browser —
 your Supabase session is in local storage — and send it as
 `authorization: Bearer <token>`.
 
+## Auth
+
+Supabase Auth issues the token; this application only decides whether to believe it.
+
+**Verified against the live project on 2026-08-22:**
+
+| | |
+|---|---|
+| Issuer | `https://<project>.supabase.co/auth/v1` |
+| JWKS | `{issuer}/.well-known/jwks.json` |
+| Algorithm | **ES256** (elliptic curve) |
+| Audience | `authenticated` |
+
+The key is asymmetric, which is the property worth having: a leaked shared secret would
+mint valid tokens for every user, while the published key verifies tokens and mints
+nothing. `app/identity.py` builds the JWKS URL from the issuer, so `AI_ANKI_JWKS_URL`
+only needs setting if that ever stops being true.
+
+The key set is fetched once and cached. A token bearing an unfamiliar `kid` triggers one
+refetch — that is how rotation is noticed without a deploy — and the ids that refetch
+failed to explain are remembered, so a forged token cannot make the process call the auth
+provider on every request.
+
+```bash
+fly secrets set AI_ANKI_JWT_ISSUER=https://<project>.supabase.co/auth/v1
+```
+
 ## Deploying
 
 One machine, one volume, one region. Two machines would be two different
