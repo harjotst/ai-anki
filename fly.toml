@@ -13,6 +13,13 @@ kill_timeout = "300s"
 
 [build]
 
+# Migrations run once per deploy, before any new machine starts, rather than
+# from inside the application's own boot. Boot is the wrong place: it runs on
+# every restart, including the ones the platform causes, and two machines
+# booting together would race each other through the same migration.
+[deploy]
+  release_command = "alembic upgrade head"
+
 [env]
   AI_ANKI_DATA_DIR = "/data/uploads"
   TMPDIR = "/data/tmp"

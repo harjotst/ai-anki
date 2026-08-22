@@ -57,6 +57,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Idempotent, and not how production gets its schema -- Fly runs
+        # `alembic upgrade head` as a release command, once per deploy, before
+        # any machine starts. This is what makes a local run and a test work
+        # without a migration step, and a test asserts the two agree.
         db.initialise(database_url)
         data_dir.mkdir(parents=True, exist_ok=True)
         conn = db.connect(database_url)

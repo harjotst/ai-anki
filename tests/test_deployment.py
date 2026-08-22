@@ -183,3 +183,12 @@ def test_the_built_frontend_calls_every_endpoint_the_journey_needs():
     assert "/api/session" not in built
     assert "signInWithOAuth" in built
     assert "authorization" in built.lower()
+
+
+def test_migrations_run_once_per_deploy_rather_than_on_every_boot():
+    """Boot is the wrong place for a migration.
+
+    It runs on every restart, including the ones the platform causes, and two
+    machines booting together would race each other through the same statements.
+    """
+    assert FLY["deploy"]["release_command"] == "alembic upgrade head"

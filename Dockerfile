@@ -71,6 +71,9 @@ COPY pyproject.toml ./
 RUN python -m pip install --upgrade pip && python -m pip install .
 
 COPY app/ ./app/
+# The release command runs `alembic upgrade head` from this image.
+COPY alembic.ini ./
+COPY migrations/ ./migrations/
 COPY --from=frontend /build/frontend/dist ./frontend/dist
 
 EXPOSE 8080
