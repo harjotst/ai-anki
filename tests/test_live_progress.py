@@ -223,8 +223,12 @@ def test_a_topic_finishing_reaches_a_client_that_is_already_watching(boot, claud
     # was already claimed, and everything after that did not exist yet at
     # connection time. It arrived because it was committed, not because it was
     # there to be read.
-    assert [(e.event, e.data.get("topic_id") or e.data["state"]) for e in events[-4:]] == [
+    # A topic now reports three times: claimed, taught, and finished. The
+    # middle one is the interesting one — a lesson is readable the moment it
+    # lands, long before the cards that reinforce it are written.
+    assert [(e.event, e.data.get("topic_id") or e.data["state"]) for e in events[-5:]] == [
         ("topic", "cell-basics"),
+        ("lesson", "cell-basics"),
         ("topic", "cell-basics"),
         ("state", "complete"),
         ("end", "complete"),

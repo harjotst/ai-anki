@@ -213,5 +213,5 @@ class Worker:
             conn, job_id, "lesson", result.usage,
             topic_id=topic.topic_id, model=self._provider.model,
         )
-        jobs.save_lesson(conn, job_id, topic.topic, result.data)
+        jobs.save_lesson(conn, job_id, topic.topic, lessons.clean(result.data))
         return True

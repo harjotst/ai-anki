@@ -242,3 +242,107 @@ def test_the_estimate_prices_the_lesson_pass_as_well_as_the_cards(client, claude
     assert estimate["estimated_cost_usd"] > ingestion.estimate_cost(
         200_000, topics=2, passes_per_topic=1
     )
+
+
+# --- reading it while the rest is still being written --------------------
+
+
+def test_a_lesson_is_readable_before_the_whole_job_has_finished(client, claude):
+    """Ten minutes of a blank screen is the failure this prevents.
+
+    Lessons are the slowest part of a job — around 4,000 output tokens each
+    against 400 for a set of cards, and output is what wall-clock is made of.
+    Making somebody wait for all of them before reading any is the difference
+    between a tool they use and a tab they close.
+    """
+    import threading
+
+    from tests.test_generation import CELL_CARDS
+
+    job_id = planned(client, claude)
+    # Every cards call hangs, so the job is still going while we look.
+    claude.answers(lesson=LESSON, cards=CELL_CARDS, pause={"cards": 1.5})
+
+    running = threading.Thread(
+        target=lambda: client.post(f"/api/jobs/{job_id}/generate"), daemon=True
+    )
+    running.start()
+    assert claude.wait_for_paused_call(timeout=5), "the first cards call should be open"
+
+    mid_run = client.get(f"/api/jobs/{job_id}/lessons").json()["lessons"]
+    assert len(mid_run) >= 1, "the first lesson is committed before its cards are asked for"
+    assert mid_run[0]["in_one_line"] == LESSON["in_one_line"]
+    assert client.get(f"/api/jobs/{job_id}").json()["state"] == "generating"
+
+    running.join(timeout=30)
+
+
+def test_a_lesson_landing_is_reported_on_the_progress_log(client, claude):
+    """A client that was never connected can still reconstruct the run, so a
+    lesson arriving has to be an event rather than only a row."""
+    job_id = planned(client, claude)
+    teach_and_generate(client, claude, job_id)
+
+    from tests.test_live_progress import sse_events
+
+    taught = [
+        event
+        for event in sse_events(client.get(f"/api/jobs/{job_id}/events"))
+        if event.event == "lesson"
+    ]
+
+    assert {event.data["topic_id"] for event in taught} == {"glycolysis", "cell-basics"}
+    assert all(event.data["path"] for event in taught)
+    # Enough to show in a list without fetching the whole lesson, which is what
+    # a screen watching a run actually needs.
+    assert all(event.data["in_one_line"] for event in taught)
+
+
+# --- text that survived a JSON encoder twice -----------------------------
+
+
+def test_escape_sequences_the_model_double_escaped_are_decoded():
+    """Seen on a real run: `\\u2014` and `\\r\\n` rendered on screen as text.
+
+    In JSON an em dash may be written literally or as a `\\u2014` escape, and
+    the decoder resolves the latter. For the escape to survive into the string
+    the model must have escaped the backslash as well — it is writing JSON
+    about JSON. Asking it not to in the prompt would help and would not be
+    reliable, and this has to be reliable: the alternative is `\\u2014` on the
+    page of every lesson that wanted a dash.
+    """
+    from app.lessons import readable
+
+    assert readable("arbitrary \\u2014 it falls out") == "arbitrary — it falls out"
+    assert readable("first.\\r\\nSecond.") == "first.\nSecond."
+    assert readable("one\\ntwo") == "one\ntwo"
+    assert readable("50 \\u00b5mol") == "50 µmol"
+
+
+def test_text_that_was_already_correct_is_left_alone():
+    from app.lessons import readable
+
+    for untouched in ["a plain sentence", "an em dash — already decoded", "5 < 10", ""]:
+        assert readable(untouched) == untouched
+
+
+def test_a_lesson_is_cleaned_before_it_is_stored(client, claude):
+    """Cleaned on the way in, not on the way out. Every reader would otherwise
+    have to remember to do it, and one of them will not."""
+    job_id = planned(client, claude)
+    claude.answers(
+        lesson={
+            **LESSON,
+            "in_one_line": "Glycolysis \\u2014 the anaerobic route.",
+            "sections": [
+                {"heading": "One", "body": "First.\\r\\nSecond.", "builds_on": None}
+            ],
+        },
+        cards={"cards": []},
+    )
+    client.post(f"/api/jobs/{job_id}/generate")
+
+    lesson = client.get(f"/api/jobs/{job_id}/topics/glycolysis/lesson").json()
+
+    assert lesson["in_one_line"] == "Glycolysis — the anaerobic route."
+    assert lesson["sections"][0]["body"] == "First.\nSecond."
