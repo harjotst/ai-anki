@@ -309,20 +309,31 @@ def mastery(
     moment = at or db.now()
     rows = conn.execute(
         "SELECT s.card_uuid, s.state, s.step, s.stability, s.difficulty, s.due,"
-        "       s.last_review, c.deck_path"
+        "       s.last_review, c.deck_path, c.topic_id"
         "  FROM study_card s"
-        "  JOIN LATERAL (SELECT deck_path FROM card WHERE card_uuid = s.card_uuid"
+        "  JOIN LATERAL (SELECT deck_path, topic_id FROM card"
+        "                 WHERE card_uuid = s.card_uuid"
         "                 ORDER BY id DESC LIMIT 1) c ON TRUE"
         " WHERE s.account_id = %s AND s.deck_id = %s",
         (account_id, deck_id),
     ).fetchall()
 
     by_path: dict[str, list[float]] = {}
+    # The topic behind each path, so a topic row on screen can open its
+    # lesson without fishing the id out of whichever cards happen to be due
+    # — which is how lessons ended up unreachable on a caught-up deck.
+    topic_of: dict[str, str] = {}
     for row in rows:
         by_path.setdefault(row["deck_path"], []).append(_retrievability(row, moment))
+        topic_of.setdefault(row["deck_path"], row["topic_id"])
 
     topics = [
-        {"deck_path": path, "cards": len(scores), "mastery": round(sum(scores) / len(scores), 4)}
+        {
+            "deck_path": path,
+            "topic_id": topic_of[path],
+            "cards": len(scores),
+            "mastery": round(sum(scores) / len(scores), 4),
+        }
         for path, scores in sorted(by_path.items())
     ]
     every = [score for scores in by_path.values() for score in scores]

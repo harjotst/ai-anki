@@ -140,7 +140,9 @@ export default function DeckDetail() {
           <div className="list">
             {!mastery && <Skeleton h={52} />}
             {mastery?.topics.map((topic) => {
-              const topicId = (due || []).find((c) => c.deck_path === topic.deck_path)?.topic_id;
+              const topicId =
+                topic.topic_id ||
+                (due || []).find((c) => c.deck_path === topic.deck_path)?.topic_id;
               const dueHere = Object.entries(dueByTopic)
                 .filter(([tid]) => (due || []).some((c) => c.topic_id === tid && c.deck_path === topic.deck_path))
                 .reduce((sum, [, n]) => sum + n, 0);

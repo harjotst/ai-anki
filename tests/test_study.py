@@ -214,6 +214,9 @@ def test_mastery_of_a_topic_is_the_mean_chance_of_recalling_its_cards(client, cl
     fresh = client.get(f"/api/decks/{deck_id}/mastery").json()
 
     assert fresh["topics"][0]["mastery"] == 0.0, "nothing recalled is nothing mastered"
+    # The topic's identity rides along: it is how a topic row on screen opens
+    # its lesson, so its absence makes lessons unreachable from a caught-up deck.
+    assert fresh["topics"][0]["topic_id"]
 
     for index, card in enumerate(due(client, deck_id)):
         answer(client, card["card_uuid"], "easy", client_uuid=f"m{index}")

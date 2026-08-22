@@ -182,7 +182,9 @@ export default function DeckDetail() {
           <View style={{ gap: space[2] }}>
             {!mastery && <Skeleton h={52} />}
             {mastery?.topics.map((topic: any) => {
-              const topicId = (due || []).find((c: any) => c.deck_path === topic.deck_path)?.topic_id;
+              const topicId =
+                topic.topic_id ||
+                (due || []).find((c: any) => c.deck_path === topic.deck_path)?.topic_id;
               const dueHere = Object.entries(dueByTopic)
                 .filter(([tid]) => (due || []).some((c: any) => c.topic_id === tid && c.deck_path === topic.deck_path))
                 .reduce((sum, [, n]) => sum + n, 0);
