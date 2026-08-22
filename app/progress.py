@@ -20,7 +20,6 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from pathlib import Path
 
 from app import db, jobs
 

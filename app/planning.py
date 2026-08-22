@@ -7,7 +7,6 @@ so a self-referencing topic node would be a 400.
 
 from __future__ import annotations
 
-from app import ingestion
 
 MODEL = "claude-opus-5"
 

@@ -1,5 +1,10 @@
 # Accounts and Postgres Implementation Plan
 
+> **Status as of 2026-08-21: tasks 1–10 done and merged.** Task 5 was withdrawn
+> during implementation — see below. Task 11's code is written and the frontend
+> builds; the two verifications it names still need a real Supabase project and
+> are the only part of this spec that is not finished.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace SQLite with managed Postgres and owner-minted Invite Tokens with real accounts, changing nothing about how documents become decks.

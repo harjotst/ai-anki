@@ -9,8 +9,7 @@ and every call would pay full price.
 
 from __future__ import annotations
 
-from app import ingestion
-from app.planning import MODEL, NOTE_TYPES, SYSTEM
+from app.planning import NOTE_TYPES, SYSTEM
 
 CARDS_SCHEMA = {
     "type": "object",

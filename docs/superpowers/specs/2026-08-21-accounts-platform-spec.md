@@ -1,6 +1,6 @@
 # Spec 1 — Accounts and the Postgres platform
 
-**Status:** approved, awaiting spec review
+**Status:** implemented, except the two verifications that need a live Supabase project
 **Date:** 2026-08-21
 **Parent design:** `2026-08-21-teaching-platform-design.md`
 **Depends on:** nothing

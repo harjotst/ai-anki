@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from pathlib import Path
 
 from app import providers
 from app import db, generation, jobs
