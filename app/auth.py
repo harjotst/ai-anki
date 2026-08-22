@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-import sqlite3
+import psycopg
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,7 +90,7 @@ def is_owner(presented: str | None, owner_token: str | None) -> bool:
     return _same(presented, owner_token)
 
 
-def mint_invite(conn: sqlite3.Connection, person: str, *, now: float | None = None) -> str:
+def mint_invite(conn: psycopg.Connection, person: str, *, now: float | None = None) -> str:
     """Issue one person's Invite Token, returning it the only time it exists.
 
     The token is `<invite_id>.<secret>`. The id half is not a secret and is what
@@ -100,13 +100,13 @@ def mint_invite(conn: sqlite3.Connection, person: str, *, now: float | None = No
     invite_id = secrets.token_hex(8)
     secret = secrets.token_urlsafe(INVITE_SECRET_BYTES)
     conn.execute(
-        "INSERT INTO invite (id, person, secret_hash, created_at) VALUES (?, ?, ?, ?)",
-        (invite_id, person, _digest(secret), now),
+        "INSERT INTO invite (id, person, secret_hash, created_at) VALUES (%s, %s, %s, %s)",
+        (invite_id, person, _digest(secret), db.at(now)),
     )
     return f"{invite_id}.{secret}"
 
 
-def list_invites(conn: sqlite3.Connection) -> list[Invite]:
+def list_invites(conn: psycopg.Connection) -> list[Invite]:
     rows = conn.execute(
         "SELECT id, person, revoked_at, created_at FROM invite ORDER BY created_at, id"
     ).fetchall()
@@ -115,13 +115,13 @@ def list_invites(conn: sqlite3.Connection) -> list[Invite]:
             invite_id=row["id"],
             person=row["person"],
             revoked=row["revoked_at"] is not None,
-            created_at=row["created_at"],
+            created_at=db.epoch(row["created_at"]),
         )
         for row in rows
     ]
 
 
-def revoke_invite(conn: sqlite3.Connection, invite_id: str, *, now: float | None = None) -> bool:
+def revoke_invite(conn: psycopg.Connection, invite_id: str, *, now: float | None = None) -> bool:
     """Withdraw one person's access, and only that person's.
 
     Their live sessions go with the invite. Leaving them would make revocation
@@ -129,19 +129,19 @@ def revoke_invite(conn: sqlite3.Connection, invite_id: str, *, now: float | None
     is asking for.
     """
     now = time.time() if now is None else now
-    if conn.execute("SELECT id FROM invite WHERE id = ?", (invite_id,)).fetchone() is None:
+    if conn.execute("SELECT id FROM invite WHERE id = %s", (invite_id,)).fetchone() is None:
         return False
     with db.transaction(conn):
         conn.execute(
-            "UPDATE invite SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
-            (now, invite_id),
+            "UPDATE invite SET revoked_at = %s WHERE id = %s AND revoked_at IS NULL",
+            (db.at(now), invite_id),
         )
-        conn.execute("DELETE FROM session WHERE invite_id = ?", (invite_id,))
+        conn.execute("DELETE FROM session WHERE invite_id = %s", (invite_id,))
     return True
 
 
 def redeem(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     token: str,
     *,
     ttl_seconds: float,
@@ -157,7 +157,7 @@ def redeem(
     now = time.time() if now is None else now
     invite_id, _, secret = (token or "").partition(".")
     row = conn.execute(
-        "SELECT id, person, secret_hash FROM invite WHERE id = ? AND revoked_at IS NULL",
+        "SELECT id, person, secret_hash FROM invite WHERE id = %s AND revoked_at IS NULL",
         (invite_id,),
     ).fetchone()
     # The stored side is already a digest, so it is compared as-is against one
@@ -170,14 +170,14 @@ def redeem(
 
     session_id = secrets.token_hex(SESSION_ID_BYTES)
     conn.execute(
-        "INSERT INTO session (id_hash, invite_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        (_digest(session_id), row["id"], now, now + ttl_seconds),
+        "INSERT INTO session (id_hash, invite_id, created_at, expires_at) VALUES (%s, %s, %s, %s)",
+        (_digest(session_id), row["id"], db.at(now), db.at(now + ttl_seconds)),
     )
     return session_id, row["person"]
 
 
 def session_invite(
-    conn: sqlite3.Connection, session_id: str | None, *, now: float | None = None
+    conn: psycopg.Connection, session_id: str | None, *, now: float | None = None
 ) -> str | None:
     """The Invite Token behind a session cookie, if it is still good for one.
 
@@ -189,25 +189,25 @@ def session_invite(
     now = time.time() if now is None else now
     row = conn.execute(
         "SELECT s.invite_id FROM session s JOIN invite i ON i.id = s.invite_id"
-        " WHERE s.id_hash = ? AND s.expires_at > ? AND i.revoked_at IS NULL",
-        (_digest(session_id), now),
+        " WHERE s.id_hash = %s AND s.expires_at > %s AND i.revoked_at IS NULL",
+        (_digest(session_id), db.at(now)),
     ).fetchone()
     return row["invite_id"] if row is not None else None
 
 
-def record_failure(conn: sqlite3.Connection, address: str, *, now: float | None = None) -> None:
+def record_failure(conn: psycopg.Connection, address: str, *, now: float | None = None) -> None:
     conn.execute(
-        "INSERT INTO login_failure (address, failed_at) VALUES (?, ?)",
-        (address, time.time() if now is None else now),
+        "INSERT INTO login_failure (address, failed_at) VALUES (%s, %s)",
+        (address, db.at(time.time() if now is None else now)),
     )
 
 
-def clear_failures(conn: sqlite3.Connection, address: str) -> None:
-    conn.execute("DELETE FROM login_failure WHERE address = ?", (address,))
+def clear_failures(conn: psycopg.Connection, address: str) -> None:
+    conn.execute("DELETE FROM login_failure WHERE address = %s", (address,))
 
 
 def lockout_remaining(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     address: str,
     *,
     lockout_seconds: float = LOCKOUT_SECONDS,
@@ -222,12 +222,12 @@ def lockout_remaining(
     now = time.time() if now is None else now
     row = conn.execute(
         "SELECT COUNT(*) AS failures, MAX(failed_at) AS last FROM login_failure"
-        " WHERE address = ? AND failed_at > ?",
-        (address, now - lockout_seconds),
+        " WHERE address = %s AND failed_at > %s",
+        (address, db.at(now - lockout_seconds)),
     ).fetchone()
     if row["failures"] < max_failures:
         return 0.0
-    return max(0.0, row["last"] + lockout_seconds - now)
+    return max(0.0, db.epoch(row["last"]) + lockout_seconds - now)
 
 
 def is_cross_origin(request: Request) -> bool:
@@ -265,9 +265,9 @@ class Guard:
     exactly how that gets lost.
     """
 
-    def __init__(self, app, *, db_path: Path, owner_token: str | None):
+    def __init__(self, app, *, database_url: str, owner_token: str | None):
         self.app = app
-        self._db_path = Path(db_path)
+        self._database_url = database_url
         self._owner_token = owner_token
 
     async def __call__(self, scope, receive, send) -> None:
@@ -285,7 +285,7 @@ class Guard:
             await self.app(scope, receive, send)
             return
 
-        conn = db.connect(self._db_path)
+        conn = db.connect(self._database_url)
         try:
             if request.url.path.startswith(OWNER_PREFIXES):
                 if not is_owner(request.headers.get("x-owner-token"), self._owner_token):

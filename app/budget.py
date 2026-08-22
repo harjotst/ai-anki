@@ -9,10 +9,10 @@ and no way to tell whose job did it.
 from __future__ import annotations
 
 import os
-import sqlite3
+import psycopg
 import time
 
-from app import ingestion
+from app import db, ingestion
 
 # Defaults. Each is a knob rather than a constant because the right value
 # depends on who is using it and how much the owner will spend finding out.
@@ -36,23 +36,23 @@ def generation_disabled() -> bool:
     return os.environ.get(KILL_SWITCH_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def spend_since(conn: sqlite3.Connection, since: float, invite_id: str | None = None) -> float:
+def spend_since(conn: psycopg.Connection, since: float, invite_id: str | None = None) -> float:
     """What has been spent in a window, from recorded usage rather than estimates."""
     sql = (
         "SELECT c.input_tokens, c.cache_creation_input_tokens, c.cache_read_input_tokens,"
         " c.output_tokens FROM api_call c JOIN job j ON j.id = c.job_id"
-        " WHERE c.created_at >= ?"
+        " WHERE c.created_at >= %s"
     )
-    params: list = [since]
+    params: list = [db.at(since)]
     if invite_id is not None:
-        sql += " AND j.invite_id = ?"
+        sql += " AND j.invite_id = %s"
         params.append(invite_id)
     return round(
         sum(ingestion.cost_of(dict(row)) for row in conn.execute(sql, params).fetchall()), 6
     )
 
 
-def spend_by_person(conn: sqlite3.Connection) -> list[dict]:
+def spend_by_person(conn: psycopg.Connection) -> list[dict]:
     """Who has spent what. Attribution is the reason invites are per-person."""
     rows = conn.execute(
         "SELECT i.id AS invite_id, i.person, c.input_tokens, c.cache_creation_input_tokens,"
@@ -70,7 +70,7 @@ def spend_by_person(conn: sqlite3.Connection) -> list[dict]:
 
 
 def check(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     invite_id: str | None,
     *,
     daily_budget_usd: float,

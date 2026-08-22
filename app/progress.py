@@ -71,7 +71,7 @@ def frame(event: str, data: dict, *, id: int | None = None) -> str:
 
 
 async def stream(
-    db_path: Path,
+    database_url: str,
     job_id: str,
     *,
     after_id: int = 0,
@@ -85,7 +85,7 @@ async def stream(
     outlives the handler that created it, and the worker is writing on a handle
     of its own the whole time.
     """
-    conn = db.connect(db_path)
+    conn = db.connect(database_url)
     deadline = time.monotonic() + max_seconds
     last_id = after_id
     last_frame_at = time.monotonic()
@@ -118,5 +118,5 @@ async def stream(
 
 
 def _state_of(conn, job_id: str) -> str | None:
-    row = conn.execute("SELECT state FROM job WHERE id = ?", (job_id,)).fetchone()
+    row = conn.execute("SELECT state FROM job WHERE id = %s", (job_id,)).fetchone()
     return None if row is None else row["state"]

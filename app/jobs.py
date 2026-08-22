@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
+import psycopg
 import time
 import uuid
 from dataclasses import dataclass
@@ -133,7 +133,7 @@ class Topic:
     card_count: int
 
 
-def record_event(conn: sqlite3.Connection, job_id: str, kind: str, data: dict) -> None:
+def record_event(conn: psycopg.Connection, job_id: str, kind: str, data: dict) -> None:
     """Append one progress event.
 
     Always called from inside the transaction that makes the change it reports,
@@ -142,15 +142,15 @@ def record_event(conn: sqlite3.Connection, job_id: str, kind: str, data: dict) -
     it did not make.
     """
     conn.execute(
-        "INSERT INTO job_event (job_id, kind, data_json, created_at) VALUES (?, ?, ?, ?)",
-        (job_id, kind, json.dumps(data), time.time()),
+        "INSERT INTO job_event (job_id, kind, data_json, created_at) VALUES (%s, %s, %s, %s)",
+        (job_id, kind, json.dumps(data), db.now()),
     )
 
 
-def events_since(conn: sqlite3.Connection, job_id: str, after_id: int) -> list[Event]:
+def events_since(conn: psycopg.Connection, job_id: str, after_id: int) -> list[Event]:
     """Everything the job has said since event `after_id`."""
     rows = conn.execute(
-        "SELECT id, kind, data_json FROM job_event WHERE job_id = ? AND id > ? ORDER BY id",
+        "SELECT id, kind, data_json FROM job_event WHERE job_id = %s AND id > %s ORDER BY id",
         (job_id, after_id),
     ).fetchall()
     return [
@@ -158,7 +158,7 @@ def events_since(conn: sqlite3.Connection, job_id: str, after_id: int) -> list[E
     ]
 
 
-def record_topic_event(conn: sqlite3.Connection, job_id: str, topic_id: str) -> None:
+def record_topic_event(conn: psycopg.Connection, job_id: str, topic_id: str) -> None:
     """Report a topic as the database now has it.
 
     The row is read back rather than assembled from what the caller meant to
@@ -168,7 +168,7 @@ def record_topic_event(conn: sqlite3.Connection, job_id: str, topic_id: str) -> 
         "SELECT t.topic_id, t.status, t.attempt_count, t.error, t.topic_json,"
         " (SELECT COUNT(*) FROM card c WHERE c.job_id = t.job_id"
         "  AND c.topic_id = t.topic_id) AS card_count"
-        " FROM topic t WHERE t.job_id = ? AND t.topic_id = ?",
+        " FROM topic t WHERE t.job_id = %s AND t.topic_id = %s",
         (job_id, topic_id),
     ).fetchone()
     if row is None:
@@ -189,7 +189,7 @@ def record_topic_event(conn: sqlite3.Connection, job_id: str, topic_id: str) -> 
 
 
 def create_job(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     data_dir: Path,
     filename: str,
     content: bytes,
@@ -213,28 +213,28 @@ def create_job(
         if deck_id is None:
             deck_id = ledger.create_deck(conn, name=safe_filename(filename), invite_id=invite_id)
         conn.execute(
-            "INSERT INTO job (id, invite_id, deck_id, state) VALUES (?, ?, ?, ?)",
+            "INSERT INTO job (id, invite_id, deck_id, state) VALUES (%s, %s, %s, %s)",
             (job_id, invite_id, deck_id, UPLOADED),
         )
         conn.execute(
             "INSERT INTO source (job_id, filename, stored_path, byte_size, position)"
-            " VALUES (?, ?, ?, ?, ?)",
+            " VALUES (%s, %s, %s, %s, %s)",
             (job_id, filename, str(stored_path), len(content), 0),
         )
         record_event(conn, job_id, "state", {"state": UPLOADED, "error": None})
     return job_id
 
 
-def load_job(conn: sqlite3.Connection, job_id: str) -> Job | None:
+def load_job(conn: psycopg.Connection, job_id: str) -> Job | None:
     row = conn.execute(
         "SELECT id, invite_id, deck_id, state, error, plan_json, attempt_count"
-        " FROM job WHERE id = ?",
+        " FROM job WHERE id = %s",
         (job_id,),
     ).fetchone()
     if row is None:
         return None
     sources = conn.execute(
-        "SELECT filename FROM source WHERE job_id = ? ORDER BY position", (job_id,)
+        "SELECT filename FROM source WHERE job_id = %s ORDER BY position", (job_id,)
     ).fetchall()
     return Job(
         id=row["id"],
@@ -248,7 +248,7 @@ def load_job(conn: sqlite3.Connection, job_id: str) -> Job | None:
     )
 
 
-def list_jobs(conn: sqlite3.Connection, invite_id: str | None) -> list[dict]:
+def list_jobs(conn: psycopg.Connection, invite_id: str | None) -> list[dict]:
     """Every job this person started, newest first.
 
     Scoped to the invite rather than filtered client-side: the list is the only
@@ -261,8 +261,8 @@ def list_jobs(conn: sqlite3.Connection, invite_id: str | None) -> list[dict]:
         "         ORDER BY s.position LIMIT 1) AS source_filename,"
         "       (SELECT COUNT(*) FROM card c WHERE c.job_id = j.id) AS card_count"
         "  FROM job j LEFT JOIN deck d ON d.id = j.deck_id"
-        " WHERE j.invite_id IS ?"
-        " ORDER BY j.created_at DESC, j.rowid DESC",
+        " WHERE j.invite_id IS NOT DISTINCT FROM %s"
+        " ORDER BY j.created_at DESC, j.id DESC",
         (invite_id,),
     ).fetchall()
     return [
@@ -281,7 +281,7 @@ def list_jobs(conn: sqlite3.Connection, invite_id: str | None) -> list[dict]:
 
 
 def transition(
-    conn: sqlite3.Connection, job_id: str, new_state: str, *, error: str | None
+    conn: psycopg.Connection, job_id: str, new_state: str, *, error: str | None
 ) -> None:
     """Move a job to `new_state`, refusing any move the machine does not allow.
 
@@ -289,18 +289,18 @@ def transition(
     setting it — a job that recovers must not keep displaying the reason it
     once failed.
     """
-    row = conn.execute("SELECT state FROM job WHERE id = ?", (job_id,)).fetchone()
+    row = conn.execute("SELECT state FROM job WHERE id = %s", (job_id,)).fetchone()
     if row is None:
         raise IllegalTransition(f"no such job: {job_id}")
     current = row["state"]
     if new_state not in TRANSITIONS[current]:
         raise IllegalTransition(f"a job in '{current}' cannot move to '{new_state}'")
-    conn.execute("UPDATE job SET state = ?, error = ? WHERE id = ?", (new_state, error, job_id))
+    conn.execute("UPDATE job SET state = %s, error = %s WHERE id = %s", (new_state, error, job_id))
     record_event(conn, job_id, "state", {"state": new_state, "error": error})
 
 
 def begin_attempt(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     job_id: str,
     state: str,
     *,
@@ -319,7 +319,7 @@ def begin_attempt(
     now = time.time() if now is None else now
     with db.transaction(conn):
         row = conn.execute(
-            "SELECT state, attempt_count, last_attempt_at FROM job WHERE id = ?", (job_id,)
+            "SELECT state, attempt_count, last_attempt_at FROM job WHERE id = %s", (job_id,)
         ).fetchone()
         if row is None:
             raise IllegalTransition(f"no such job: {job_id}")
@@ -341,7 +341,7 @@ def begin_attempt(
                 "explicitly before it runs again"
             )
 
-        waited = now - (row["last_attempt_at"] or 0.0)
+        waited = now - (db.epoch(row["last_attempt_at"]) or 0.0)
         if row["attempt_count"] > 0 and waited < backoff_seconds:
             raise ResumeRefused(
                 "too soon after the last attempt", retry_after=backoff_seconds - waited
@@ -349,13 +349,13 @@ def begin_attempt(
 
         transition(conn, job_id, state, error=None)
         conn.execute(
-            "UPDATE job SET attempt_count = attempt_count + 1, last_attempt_at = ?,"
-            " worker_id = ? WHERE id = ?",
-            (now, worker_id, job_id),
+            "UPDATE job SET attempt_count = attempt_count + 1, last_attempt_at = %s,"
+            " worker_id = %s WHERE id = %s",
+            (db.at(now), worker_id, job_id),
         )
 
 
-def recover_orphans(conn: sqlite3.Connection, worker_id: str) -> list[str]:
+def recover_orphans(conn: psycopg.Connection, worker_id: str) -> list[str]:
     """Deal with jobs left mid-flight by a machine that is no longer here.
 
     One machine, one worker: any job still claiming to be running that this
@@ -366,7 +366,7 @@ def recover_orphans(conn: sqlite3.Connection, worker_id: str) -> list[str]:
     """
     orphans = conn.execute(
         "SELECT id, attempt_count FROM job WHERE state IN"
-        f" ({','.join('?' * len(IN_FLIGHT))}) AND (worker_id IS NULL OR worker_id != ?)",
+        f" ({','.join(['%s'] * len(IN_FLIGHT))}) AND (worker_id IS NULL OR worker_id != %s)",
         (*sorted(IN_FLIGHT), worker_id),
     ).fetchall()
 
@@ -388,7 +388,7 @@ def recover_orphans(conn: sqlite3.Connection, worker_id: str) -> list[str]:
     return [orphan["id"] for orphan in orphans]
 
 
-def release_running_topics(conn: sqlite3.Connection, job_id: str) -> None:
+def release_running_topics(conn: psycopg.Connection, job_id: str) -> None:
     """Hand back every topic claimed by a process that will not finish it.
 
     The ids are read before the update so each released topic can report itself:
@@ -396,27 +396,27 @@ def release_running_topics(conn: sqlite3.Connection, job_id: str) -> None:
     left displaying work that nobody is doing.
     """
     released = conn.execute(
-        "SELECT topic_id FROM topic WHERE job_id = ? AND status = ?", (job_id, TOPIC_RUNNING)
+        "SELECT topic_id FROM topic WHERE job_id = %s AND status = %s", (job_id, TOPIC_RUNNING)
     ).fetchall()
     conn.execute(
-        "UPDATE topic SET status = ? WHERE job_id = ? AND status = ?",
+        "UPDATE topic SET status = %s WHERE job_id = %s AND status = %s",
         (TOPIC_PENDING, job_id, TOPIC_RUNNING),
     )
     for row in released:
         record_topic_event(conn, job_id, row["topic_id"])
 
 
-def clear_dead_job(conn: sqlite3.Connection, job_id: str) -> None:
+def clear_dead_job(conn: psycopg.Connection, job_id: str) -> None:
     """The explicit manual clearing a dead job requires before it runs again."""
     with db.transaction(conn):
         transition(conn, job_id, INTERRUPTED, error=None)
-        conn.execute("UPDATE job SET attempt_count = 0 WHERE id = ?", (job_id,))
+        conn.execute("UPDATE job SET attempt_count = 0 WHERE id = %s", (job_id,))
 
 
-def load_sources(conn: sqlite3.Connection, job_id: str) -> list[Source]:
+def load_sources(conn: psycopg.Connection, job_id: str) -> list[Source]:
     rows = conn.execute(
         "SELECT filename, stored_path, file_id, converted_path FROM source"
-        " WHERE job_id = ? ORDER BY position",
+        " WHERE job_id = %s ORDER BY position",
         (job_id,),
     ).fetchall()
     return [
@@ -430,14 +430,15 @@ def load_sources(conn: sqlite3.Connection, job_id: str) -> list[Source]:
     ]
 
 
-def replace_plan(conn: sqlite3.Connection, job_id: str, plan: dict) -> None:
+def replace_plan(conn: psycopg.Connection, job_id: str, plan: dict) -> None:
     """Store an edited plan and rebuild the topic rows it implies."""
     with db.transaction(conn):
-        conn.execute("UPDATE job SET plan_json = ? WHERE id = ?", (json.dumps(plan), job_id))
-        conn.execute("DELETE FROM topic WHERE job_id = ?", (job_id,))
-        conn.executemany(
+        conn.execute("UPDATE job SET plan_json = %s WHERE id = %s", (json.dumps(plan), job_id))
+        conn.execute("DELETE FROM topic WHERE job_id = %s", (job_id,))
+        db.executemany(
+            conn,
             "INSERT INTO topic (job_id, topic_id, position, status, topic_json)"
-            " VALUES (?, ?, ?, ?, ?)",
+            " VALUES (%s, %s, %s, %s, %s)",
             [
                 (job_id, topic["topic_id"], position, TOPIC_PENDING, json.dumps(topic))
                 for position, topic in enumerate(plan["topics"])
@@ -446,28 +447,28 @@ def replace_plan(conn: sqlite3.Connection, job_id: str, plan: dict) -> None:
         record_event(conn, job_id, "plan", {"topics": len(plan["topics"])})
 
 
-def update_card(conn: sqlite3.Connection, card_uuid: str, front: str, back: str) -> bool:
+def update_card(conn: psycopg.Connection, card_uuid: str, front: str, back: str) -> bool:
     updated = conn.execute(
         # Correcting a card is the strongest evidence there is that somebody
         # read it, so it counts as reviewed without a second click.
-        "UPDATE card SET front = ?, back = ?, question_fingerprint = ?,"
-        " reviewed_at = COALESCE(reviewed_at, ?) WHERE card_uuid = ?",
-        (front, back, ledger.fingerprint(front), time.time(), card_uuid),
+        "UPDATE card SET front = %s, back = %s, question_fingerprint = %s,"
+        " reviewed_at = COALESCE(reviewed_at, %s) WHERE card_uuid = %s",
+        (front, back, ledger.fingerprint(front), db.now(), card_uuid),
     )
     return updated.rowcount > 0
 
 
-def delete_card(conn: sqlite3.Connection, card_uuid: str) -> bool:
-    return conn.execute("DELETE FROM card WHERE card_uuid = ?", (card_uuid,)).rowcount > 0
+def delete_card(conn: psycopg.Connection, card_uuid: str) -> bool:
+    return conn.execute("DELETE FROM card WHERE card_uuid = %s", (card_uuid,)).rowcount > 0
 
 
-def delete_topic_cards(conn: sqlite3.Connection, job_id: str, topic_id: str) -> int:
+def delete_topic_cards(conn: psycopg.Connection, job_id: str, topic_id: str) -> int:
     return conn.execute(
-        "DELETE FROM card WHERE job_id = ? AND topic_id = ?", (job_id, topic_id)
+        "DELETE FROM card WHERE job_id = %s AND topic_id = %s", (job_id, topic_id)
     ).rowcount
 
 
-def reject_cards(conn: sqlite3.Connection, job_id: str, card_uuids: list[str]) -> int:
+def reject_cards(conn: psycopg.Connection, job_id: str, card_uuids: list[str]) -> int:
     """Drop several cards at once, and report how many were actually there.
 
     Scoped to the job so a uuid from somewhere else cannot ride along, and
@@ -477,59 +478,62 @@ def reject_cards(conn: sqlite3.Connection, job_id: str, card_uuids: list[str]) -
     """
     if not card_uuids:
         return 0
-    marks = ",".join("?" * len(card_uuids))
+    marks = ",".join(["%s"] * len(card_uuids))
     return conn.execute(
-        f"DELETE FROM card WHERE job_id = ? AND card_uuid IN ({marks})",
+        f"DELETE FROM card WHERE job_id = %s AND card_uuid IN ({marks})",
         [job_id, *card_uuids],
     ).rowcount
 
 
-def accept_cards(conn: sqlite3.Connection, job_id: str, card_uuids: list[str]) -> int:
+def accept_cards(conn: psycopg.Connection, job_id: str, card_uuids: list[str]) -> int:
     """Mark cards read. Idempotent: the first time is the one that counts."""
     if not card_uuids:
         return 0
-    marks = ",".join("?" * len(card_uuids))
+    marks = ",".join(["%s"] * len(card_uuids))
     return conn.execute(
-        f"UPDATE card SET reviewed_at = COALESCE(reviewed_at, ?)"
-        f" WHERE job_id = ? AND card_uuid IN ({marks})",
-        [time.time(), job_id, *card_uuids],
+        f"UPDATE card SET reviewed_at = COALESCE(reviewed_at, %s)"
+        f" WHERE job_id = %s AND card_uuid IN ({marks})",
+        [db.now(), job_id, *card_uuids],
     ).rowcount
 
 
-def find_card(conn: sqlite3.Connection, card_uuid: str) -> dict | None:
+def find_card(conn: psycopg.Connection, card_uuid: str) -> dict | None:
     row = conn.execute(
-        "SELECT job_id, topic_id, front, back, note_type FROM card WHERE card_uuid = ?",
+        "SELECT job_id, topic_id, front, back, note_type FROM card WHERE card_uuid = %s",
         (card_uuid,),
     ).fetchone()
     return dict(row) if row else None
 
 
-def topic_of(conn: sqlite3.Connection, job_id: str, topic_id: str) -> dict | None:
+def topic_of(conn: psycopg.Connection, job_id: str, topic_id: str) -> dict | None:
     row = conn.execute(
-        "SELECT topic_json FROM topic WHERE job_id = ? AND topic_id = ?", (job_id, topic_id)
+        "SELECT topic_json FROM topic WHERE job_id = %s AND topic_id = %s", (job_id, topic_id)
     ).fetchone()
     return json.loads(row["topic_json"]) if row else None
 
 
-def sibling_topics(conn: sqlite3.Connection, job_id: str, topic_id: str) -> list[dict]:
+def sibling_topics(conn: psycopg.Connection, job_id: str, topic_id: str) -> list[dict]:
     """The other topics in this plan, and what they own."""
     rows = conn.execute(
-        "SELECT topic_json FROM topic WHERE job_id = ? AND topic_id != ? ORDER BY position",
+        "SELECT topic_json FROM topic WHERE job_id = %s AND topic_id != %s ORDER BY position",
         (job_id, topic_id),
     ).fetchall()
     return [json.loads(row["topic_json"]) for row in rows]
 
 
-def existing_cards_for_topic(conn: sqlite3.Connection, job_id: str, topic_id: str) -> list[dict]:
+def existing_cards_for_topic(conn: psycopg.Connection, job_id: str, topic_id: str) -> list[dict]:
     """What this job's Deck already has for this topic."""
-    row = conn.execute("SELECT deck_id FROM job WHERE id = ?", (job_id,)).fetchone()
+    row = conn.execute("SELECT deck_id FROM job WHERE id = %s", (job_id,)).fetchone()
     if row is None or not row["deck_id"]:
         return []
     return ledger.exported_cards(conn, row["deck_id"], topic_id)
 
 
-def purge_sources(conn: sqlite3.Connection, data_dir: Path, *, older_than_days: float) -> int:
+def purge_sources(conn: psycopg.Connection, data_dir: Path, *, older_than_days: float) -> int:
     """Delete stored uploads older than the window. The ledger is untouched."""
+    # A float, deliberately: this cutoff is compared against `st_mtime` from the
+    # filesystem and never reaches SQL, so converting it to a timestamp would be
+    # converting it into the wrong vocabulary.
     cutoff = time.time() - older_than_days * 86400
     removed = 0
     for row in conn.execute("SELECT id, stored_path FROM source").fetchall():
@@ -537,13 +541,13 @@ def purge_sources(conn: sqlite3.Connection, data_dir: Path, *, older_than_days: 
         if not path.exists() or path.stat().st_mtime > cutoff:
             continue
         path.unlink()
-        conn.execute("UPDATE source SET stored_path = ? WHERE id = ?", ("", row["id"]))
+        conn.execute("UPDATE source SET stored_path = %s WHERE id = %s", ("", row["id"]))
         removed += 1
     return removed
 
 
 def record_usage(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     job_id: str,
     pass_name: str,
     usage,
@@ -555,7 +559,7 @@ def record_usage(
     conn.execute(
         "INSERT INTO api_call (job_id, pass_name, topic_id, model, input_tokens,"
         " cache_creation_input_tokens, cache_read_input_tokens, output_tokens, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (
             job_id,
             pass_name,
@@ -565,7 +569,7 @@ def record_usage(
             usage.cache_write_tokens,
             usage.cache_read_tokens,
             usage.output_tokens,
-            time.time(),
+            db.now(),
         ),
     )
 
@@ -575,20 +579,20 @@ def planning_model() -> str:
     return "unknown"
 
 
-def load_usage(conn: sqlite3.Connection, job_id: str) -> list[dict]:
+def load_usage(conn: psycopg.Connection, job_id: str) -> list[dict]:
     rows = conn.execute(
         "SELECT pass_name, topic_id, model, input_tokens, cache_creation_input_tokens,"
-        " cache_read_input_tokens, output_tokens FROM api_call WHERE job_id = ? ORDER BY id",
+        " cache_read_input_tokens, output_tokens FROM api_call WHERE job_id = %s ORDER BY id",
         (job_id,),
     ).fetchall()
     return [dict(row) for row in rows]
 
 
-def record_input_tokens(conn: sqlite3.Connection, job_id: str, input_tokens: int) -> None:
-    conn.execute("UPDATE job SET input_tokens = ? WHERE id = ?", (input_tokens, job_id))
+def record_input_tokens(conn: psycopg.Connection, job_id: str, input_tokens: int) -> None:
+    conn.execute("UPDATE job SET input_tokens = %s WHERE id = %s", (input_tokens, job_id))
 
 
-def documents_for(conn: sqlite3.Connection, job_id: str, provider) -> list[dict]:
+def documents_for(conn: psycopg.Connection, job_id: str, provider) -> list[dict]:
     """Rebuild the document blocks both passes share.
 
     A resume happens in a process that never saw the first attempt, so this has
@@ -606,19 +610,19 @@ def documents_for(conn: sqlite3.Connection, job_id: str, provider) -> list[dict]
     for filename, file_id in known.items():
         if before_ids.get(filename) != file_id:
             conn.execute(
-                "UPDATE source SET file_id = ? WHERE job_id = ? AND filename = ?",
+                "UPDATE source SET file_id = %s WHERE job_id = %s AND filename = %s",
                 (file_id, job_id, filename),
             )
     for filename, path in converted.items():
         if before_converted.get(filename) != path:
             conn.execute(
-                "UPDATE source SET converted_path = ? WHERE job_id = ? AND filename = ?",
+                "UPDATE source SET converted_path = %s WHERE job_id = %s AND filename = %s",
                 (path, job_id, filename),
             )
     return blocks
 
 
-def interrupt_job(conn: sqlite3.Connection, job_id: str, reason: str) -> None:
+def interrupt_job(conn: psycopg.Connection, job_id: str, reason: str) -> None:
     """Record a job as stopped by something outside it.
 
     A topic still marked `running` is released with it: the checkpoint is the
@@ -626,7 +630,7 @@ def interrupt_job(conn: sqlite3.Connection, job_id: str, reason: str) -> None:
     be worked on by nobody. Idempotent, because both the run loop and the drain
     that outran it may arrive here for the same job.
     """
-    row = conn.execute("SELECT state FROM job WHERE id = ?", (job_id,)).fetchone()
+    row = conn.execute("SELECT state FROM job WHERE id = %s", (job_id,)).fetchone()
     if row is None or row["state"] not in IN_FLIGHT:
         return
     with db.transaction(conn):
@@ -673,7 +677,7 @@ def _slug(value: str) -> str:
 
 
 def save_topic_cards(
-    conn: sqlite3.Connection, job_id: str, topic: dict, cards: list[dict]
+    conn: psycopg.Connection, job_id: str, topic: dict, cards: list[dict]
 ) -> None:
     """Checkpoint one topic: its cards and its status, or neither.
 
@@ -682,14 +686,15 @@ def save_topic_cards(
     attempts in the deck.
     """
     topic_id = topic["topic_id"]
-    deck_id = conn.execute("SELECT deck_id FROM job WHERE id = ?", (job_id,)).fetchone()["deck_id"]
+    deck_id = conn.execute("SELECT deck_id FROM job WHERE id = %s", (job_id,)).fetchone()["deck_id"]
     with db.transaction(conn):
-        conn.execute("DELETE FROM card WHERE job_id = ? AND topic_id = ?", (job_id, topic_id))
-        conn.executemany(
+        conn.execute("DELETE FROM card WHERE job_id = %s AND topic_id = %s", (job_id, topic_id))
+        db.executemany(
+            conn,
             "INSERT INTO card (job_id, deck_id, card_uuid, topic_id, deck_path, note_type,"
             " front, back, source_page, difficulty, downgraded, question_fingerprint,"
             " claimed_card_uuid, position)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             [
                 (
                     job_id,
@@ -702,10 +707,8 @@ def save_topic_cards(
                     card["back"],
                     card.get("source_page"),
                     topic.get("difficulty", "medium"),
-                    int(
-                        card["note_type"] == "cloze"
-                        and not packaging.has_cloze_marker(card["front"])
-                    ),
+                    card["note_type"] == "cloze"
+                    and not packaging.has_cloze_marker(card["front"]),
                     ledger.fingerprint(card["front"]),
                     card.get("existing_card_id"),
                     position,
@@ -714,7 +717,7 @@ def save_topic_cards(
             ],
         )
         conn.execute(
-            "UPDATE topic SET status = ?, error = NULL WHERE job_id = ? AND topic_id = ?",
+            "UPDATE topic SET status = %s, error = NULL WHERE job_id = %s AND topic_id = %s",
             (TOPIC_DONE, job_id, topic_id),
         )
         # Cards asking a question this deck already exported take over that
@@ -731,7 +734,7 @@ def save_topic_cards(
         record_topic_event(conn, job_id, topic_id)
 
 
-def load_cards(conn: sqlite3.Connection, job_id: str) -> list[Card]:
+def load_cards(conn: psycopg.Connection, job_id: str) -> list[Card]:
     # Cards are ordered by their topic's place in the plan, then by their own
     # place within the topic, so a re-run of one topic cannot reshuffle the deck.
     rows = conn.execute(
@@ -739,7 +742,7 @@ def load_cards(conn: sqlite3.Connection, job_id: str) -> list[Card]:
         " c.source_page, c.difficulty, c.downgraded, c.match_rejected_reason,"
         " c.duplicate_of, c.reviewed_at"
         " FROM card c JOIN topic t ON t.job_id = c.job_id AND t.topic_id = c.topic_id"
-        " WHERE c.job_id = ? ORDER BY t.position, c.position",
+        " WHERE c.job_id = %s ORDER BY t.position, c.position",
         (job_id,),
     ).fetchall()
     return [
@@ -755,12 +758,12 @@ def load_cards(conn: sqlite3.Connection, job_id: str) -> list[Card]:
     ]
 
 
-def load_topics(conn: sqlite3.Connection, job_id: str) -> list[Topic]:
+def load_topics(conn: psycopg.Connection, job_id: str) -> list[Topic]:
     rows = conn.execute(
         "SELECT t.topic_id, t.status, t.attempt_count, t.error, t.topic_json,"
         " (SELECT COUNT(*) FROM card c WHERE c.job_id = t.job_id"
         "  AND c.topic_id = t.topic_id) AS card_count"
-        " FROM topic t WHERE t.job_id = ? ORDER BY t.position",
+        " FROM topic t WHERE t.job_id = %s ORDER BY t.position",
         (job_id,),
     ).fetchall()
     return [
@@ -776,38 +779,38 @@ def load_topics(conn: sqlite3.Connection, job_id: str) -> list[Topic]:
     ]
 
 
-def unfinished_topics(conn: sqlite3.Connection, job_id: str) -> list[Topic]:
+def unfinished_topics(conn: psycopg.Connection, job_id: str) -> list[Topic]:
     return [t for t in load_topics(conn, job_id) if t.status != TOPIC_DONE]
 
 
-def start_topic(conn: sqlite3.Connection, job_id: str, topic_id: str) -> None:
+def start_topic(conn: psycopg.Connection, job_id: str, topic_id: str) -> None:
     """Claim a topic before its Anthropic call, never after it."""
     with db.transaction(conn):
         conn.execute(
-            "UPDATE topic SET status = ?, attempt_count = attempt_count + 1"
-            " WHERE job_id = ? AND topic_id = ?",
+            "UPDATE topic SET status = %s, attempt_count = attempt_count + 1"
+            " WHERE job_id = %s AND topic_id = %s",
             (TOPIC_RUNNING, job_id, topic_id),
         )
         record_topic_event(conn, job_id, topic_id)
 
 
-def fail_topic(conn: sqlite3.Connection, job_id: str, topic_id: str, error: str) -> None:
+def fail_topic(conn: psycopg.Connection, job_id: str, topic_id: str, error: str) -> None:
     with db.transaction(conn):
         conn.execute(
-            "UPDATE topic SET status = ?, error = ? WHERE job_id = ? AND topic_id = ?",
+            "UPDATE topic SET status = %s, error = %s WHERE job_id = %s AND topic_id = %s",
             (TOPIC_FAILED, error, job_id, topic_id),
         )
         record_topic_event(conn, job_id, topic_id)
 
 
-def fail_job(conn: sqlite3.Connection, job_id: str, error: str) -> None:
+def fail_job(conn: psycopg.Connection, job_id: str, error: str) -> None:
     # A state change and the event that reports it always commit together, so a
     # watching client can never be shown a job in a state the database has left.
     with db.transaction(conn):
         transition(conn, job_id, FAILED, error=error)
 
 
-def save_plan(conn: sqlite3.Connection, job_id: str, plan: dict) -> None:
+def save_plan(conn: psycopg.Connection, job_id: str, plan: dict) -> None:
     """Store the Deck Plan and lay down one topic row per Topic.
 
     A new plan supersedes the old one, so topics start again from `pending` and
@@ -816,22 +819,23 @@ def save_plan(conn: sqlite3.Connection, job_id: str, plan: dict) -> None:
     """
     topics = plan["topics"]
     with db.transaction(conn):
-        conn.execute("UPDATE job SET plan_json = ? WHERE id = ?", (json.dumps(plan), job_id))
+        conn.execute("UPDATE job SET plan_json = %s WHERE id = %s", (json.dumps(plan), job_id))
         transition(conn, job_id, PLAN_READY, error=None)
         # Reaching a plan is progress, so the crash-loop counter starts again.
-        conn.execute("UPDATE job SET attempt_count = 0 WHERE id = ?", (job_id,))
-        conn.execute("DELETE FROM topic WHERE job_id = ?", (job_id,))
-        conn.executemany(
+        conn.execute("UPDATE job SET attempt_count = 0 WHERE id = %s", (job_id,))
+        conn.execute("DELETE FROM topic WHERE job_id = %s", (job_id,))
+        db.executemany(
+            conn,
             "INSERT INTO topic (job_id, topic_id, position, status, topic_json)"
-            " VALUES (?, ?, ?, ?, ?)",
+            " VALUES (%s, %s, %s, %s, %s)",
             [
                 (job_id, topic["topic_id"], position, TOPIC_PENDING, json.dumps(topic))
                 for position, topic in enumerate(topics)
             ],
         )
-        placeholders = ",".join("?" * len(topics))
+        placeholders = ",".join(["%s"] * len(topics))
         conn.execute(
-            f"DELETE FROM card WHERE job_id = ? AND topic_id NOT IN ({placeholders})",
+            f"DELETE FROM card WHERE job_id = %s AND topic_id NOT IN ({placeholders})",
             (job_id, *[topic["topic_id"] for topic in topics]),
         )
         # The plan reaching the client as events is what lets a watcher build the
@@ -840,7 +844,7 @@ def save_plan(conn: sqlite3.Connection, job_id: str, plan: dict) -> None:
             record_topic_event(conn, job_id, topic["topic_id"])
 
 
-def settle_job(conn: sqlite3.Connection, job_id: str) -> str:
+def settle_job(conn: psycopg.Connection, job_id: str) -> str:
     """Close out a generation run against what the topic rows actually say."""
     unfinished = unfinished_topics(conn, job_id)
     if unfinished:
@@ -849,5 +853,5 @@ def settle_job(conn: sqlite3.Connection, job_id: str) -> str:
         return FAILED
     with db.transaction(conn):
         transition(conn, job_id, COMPLETE, error=None)
-        conn.execute("UPDATE job SET attempt_count = 0 WHERE id = ?", (job_id,))
+        conn.execute("UPDATE job SET attempt_count = 0 WHERE id = %s", (job_id,))
     return COMPLETE

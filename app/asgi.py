@@ -20,7 +20,7 @@ def _float(name: str, default: float) -> float:
 
 
 app = create_app(
-    db_path=Path(os.environ.get("AI_ANKI_DB_PATH", "/data/ai-anki.db")),
+    database_url=os.environ["AI_ANKI_DATABASE_URL"],
     data_dir=Path(os.environ.get("AI_ANKI_DATA_DIR", "/data/uploads")),
     # Runtime secrets, never baked into the image. An unset owner token closes
     # minting rather than opening it.

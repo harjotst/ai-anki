@@ -119,14 +119,28 @@ curl -X POST -H "x-owner-token: $AI_ANKI_OWNER_TOKEN" \
 
 ```bash
 aws s3 ls s3://ai-anki-backups/db/ --endpoint-url https://fly.storage.tigris.dev
-aws s3 cp s3://ai-anki-backups/db/<key> ./restore.db.gz \
-  --endpoint-url https://fly.storage.tigris.dev
-gunzip restore.db.gz
 ```
 
-Then stop the machine, put `restore.db` at `/data/ai-anki.db` on the volume, and
-start it again. Boot recovery re-claims any job the old process was mid-way
-through; nothing else needs doing.
+```bash
+aws s3 cp s3://ai-anki-backups/db/<key> ./restore.dump \
+  --endpoint-url https://fly.storage.tigris.dev
+```
+
+```bash
+pg_restore --dbname "$AI_ANKI_DATABASE_URL" --no-owner --clean --if-exists ./restore.dump
+```
+
+**Use a `pg_restore` whose major version matches the target server.** Verified
+on 2026-08-21: a dump taken with client 17 restores its data correctly into a
+16 server, but `pg_restore` 17 emits `SET transaction_timeout = 0`, which 16
+does not recognise — so every row lands and the command still exits non-zero.
+An automated restore that trusts the exit code would report a working restore
+as a failure, or a failed one as working, depending on which way it guessed.
+
+The image carries client 17 because `pg_dump` refuses outright to dump a server
+newer than itself; Debian's own package is 15 and cannot back up a modern
+server at all. The rule is one-directional: the client must be at least as new
+as the server it dumps.
 
 Test a restore before you need one. A backup nobody has restored is a backup
 whose format nobody has checked.

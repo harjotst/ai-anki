@@ -10,13 +10,21 @@ call with the wrong parameter shape fails the test the way it would fail the
 service.
 """
 
-import gzip
+import shutil
 import time
 
 import pytest
 from botocore.stub import ANY, Stubber
 
 from app import backup, db
+
+# `pg_dump` ships with the Postgres client tools. It is present in the runtime
+# image and in CI; a developer machine may not have it, and a skip that says so
+# is better than a failure that looks like a bug in the code under test.
+needs_pg_dump = pytest.mark.skipif(
+    shutil.which("pg_dump") is None,
+    reason="pg_dump is not installed on this machine; the runtime image has it",
+)
 
 
 @pytest.fixture
@@ -37,17 +45,20 @@ def s3(destination):
 
 
 @pytest.fixture
-def populated(tmp_path):
-    path = tmp_path / "ai-anki.db"
-    db.initialise(path)
-    conn = db.connect(path)
+def populated(pg_dsn):
+    """A database with something in it, so a dump that silently produced an
+    empty archive would still fail the restore assertion."""
+    db.initialise(pg_dsn)
+    conn = db.connect(pg_dsn)
     conn.execute(
-        "INSERT INTO deck (id, invite_id, name, created_at) VALUES ('d1', NULL, 'Bio', 1.0)"
+        "INSERT INTO deck (id, invite_id, name, created_at)"
+        " VALUES ('d1', NULL, 'Bio', now())"
     )
     conn.close()
-    return path
+    return pg_dsn
 
 
+@needs_pg_dump
 def test_a_backup_is_a_consistent_compressed_copy_of_the_live_database(populated, tmp_path):
     written = backup.snapshot(populated, tmp_path / "out.db.gz")
 
@@ -61,6 +72,7 @@ def test_a_backup_is_a_consistent_compressed_copy_of_the_live_database(populated
     conn.close()
 
 
+@needs_pg_dump
 def test_a_backup_is_uploaded_under_a_key_that_sorts_by_date(populated, tmp_path, s3, destination):
     client, stub = s3
     stub.add_response(
@@ -83,6 +95,7 @@ def test_a_backup_is_uploaded_under_a_key_that_sorts_by_date(populated, tmp_path
     stub.assert_no_pending_responses()
 
 
+@needs_pg_dump
 def test_copies_older_than_the_retention_window_are_deleted(populated, tmp_path, s3, destination):
     client, stub = s3
     now = 1787281200.0
@@ -114,6 +127,7 @@ def test_copies_older_than_the_retention_window_are_deleted(populated, tmp_path,
     stub.assert_no_pending_responses()
 
 
+@needs_pg_dump
 def test_nothing_is_deleted_when_there_is_nothing_old_enough(populated, tmp_path, s3, destination):
     """A prune that deletes on an empty listing would wipe the whole history."""
     client, stub = s3
@@ -131,6 +145,7 @@ def test_nothing_is_deleted_when_there_is_nothing_old_enough(populated, tmp_path
     stub.assert_no_pending_responses()
 
 
+@needs_pg_dump
 def test_the_snapshot_is_removed_from_the_volume_once_it_is_uploaded(
     populated, tmp_path, s3, destination
 ):
@@ -185,6 +200,7 @@ def test_the_next_run_is_the_next_time_the_scheduled_hour_comes_round():
     assert backup.seconds_until_next_run(at(2026, 8, 21, 3), hour_utc=3) == 86400
 
 
+@needs_pg_dump
 def test_the_manual_trigger_says_plainly_that_a_local_copy_is_not_a_backup(client):
     """Without a bucket the endpoint still works, and does not pretend."""
     from tests.conftest import OWNER
@@ -196,6 +212,7 @@ def test_the_manual_trigger_says_plainly_that_a_local_copy_is_not_a_backup(clien
     assert "AI_ANKI_BACKUP_BUCKET" in taken["warning"]
 
 
+@needs_pg_dump
 def test_a_configured_bucket_makes_the_manual_trigger_go_off_platform(boot, destination):
     client = backup.build_client(destination, key_id="k", secret="s")
     with Stubber(client) as stub:

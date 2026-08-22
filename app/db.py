@@ -1,26 +1,50 @@
-"""SQLite access.
+"""Postgres access.
 
-One database file on a mounted volume is the only datastore. Connections are
-opened per request rather than shared, so the worker and the API never contend
-on a single handle.
+The datastore moved off SQLite when the application grew accounts. One file on
+one machine was the right shape while a Deck was regenerable and a lost volume
+cost nothing but a re-run; it stopped being the right shape when the same volume
+started holding people's logins and payment state.
+
+Two deliberate choices about how this differs from the SQLite module it
+replaces:
+
+`row["column"]` still works, because the connection uses `dict_row`. Ninety-five
+call sites read rows that way and none of them should have had to care which
+database answered.
+
+Placeholders are `%s` rather than `?`, rewritten at every one of the two hundred
+call sites rather than translated at runtime. A wrapper that rewrote `?` on the
+way past would have been a smaller diff and would have corrupted any query
+holding a `?` inside a string literal, a LIKE pattern or a JSON operator.
 """
 
 from __future__ import annotations
 
-import sqlite3
+import os
 from contextlib import contextmanager
-from pathlib import Path
+from datetime import datetime, timezone
 
+import psycopg
+from psycopg.rows import dict_row
+
+# Every moment in time is TIMESTAMPTZ. The SQLite schema stored some as float
+# epochs and one as a `datetime('now')` string, and compared them in both Python
+# and SQL -- which worked only because SQLite does not type-check. A single
+# representation is the point: a timezone bug here surfaces as backups pruned
+# early or a budget window resetting at the wrong hour, months later.
 SCHEMA = """
 -- An Invite Token is one person's credential, minted and revoked on its own.
 -- Only the digest of the secret half is kept: the token is shown once, when it
 -- is minted, and the database can never give it back.
+--
+-- Superseded by `account` and deleted once sign-in moves to Supabase; it lives
+-- here so the port and the identity change can be separate, reviewable steps.
 CREATE TABLE IF NOT EXISTS invite (
     id                TEXT PRIMARY KEY,
     person            TEXT NOT NULL,
     secret_hash       TEXT NOT NULL,
-    revoked_at        REAL,
-    created_at        REAL NOT NULL
+    revoked_at        TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL
 );
 
 -- Sessions live here rather than in the process, so that a restart does not
@@ -28,9 +52,9 @@ CREATE TABLE IF NOT EXISTS invite (
 CREATE TABLE IF NOT EXISTS session (
     id_hash           TEXT PRIMARY KEY,
     invite_id         TEXT NOT NULL REFERENCES invite(id) ON DELETE CASCADE,
-    created_at        REAL NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL,
     -- Absolute, and never extended by use.
-    expires_at        REAL NOT NULL
+    expires_at        TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS session_invite_idx ON session(invite_id);
@@ -38,9 +62,9 @@ CREATE INDEX IF NOT EXISTS session_invite_idx ON session(invite_id);
 -- Failed sign-ins, per address. In the database with everything else because a
 -- lockout held in memory is lifted by the restart an attacker can cause.
 CREATE TABLE IF NOT EXISTS login_failure (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     address           TEXT NOT NULL,
-    failed_at         REAL NOT NULL
+    failed_at         TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS login_failure_address_idx ON login_failure(address, failed_at);
@@ -54,8 +78,11 @@ CREATE TABLE IF NOT EXISTS deck (
     -- Every export stamps strictly later than the last. Anki's default import
     -- is "update if newer" on note modification time, so an export that does
     -- not advance is filed as a duplicate and silently changes nothing.
-    last_exported_at  REAL NOT NULL DEFAULT 0,
-    created_at        REAL NOT NULL
+    --
+    -- NULL, not zero, for a deck nothing has been exported from. Zero would be
+    -- 1970 once this column became a real timestamp, which reads as a date.
+    last_exported_at  TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS job (
@@ -71,23 +98,23 @@ CREATE TABLE IF NOT EXISTS job (
     -- first Anthropic call of a run and reset when the job actually advances,
     -- so a crash-loop is bounded even though the crash itself runs no code.
     attempt_count     INTEGER NOT NULL DEFAULT 0,
-    last_attempt_at   REAL,
+    last_attempt_at   TIMESTAMPTZ,
     -- What the admission gate measured. Tokens, because that is what is
     -- billed; pages are neither available for every format nor predictive.
     input_tokens      INTEGER,
     -- The process instance that last claimed this job. On one machine, a job
     -- claimed by anyone other than the booting process has no live worker.
     worker_id         TEXT,
-    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- A Source is one uploaded file belonging to a Job.
 CREATE TABLE IF NOT EXISTS source (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     job_id            TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE,
     filename          TEXT NOT NULL,
     stored_path       TEXT NOT NULL,
-    byte_size         INTEGER NOT NULL,
+    byte_size         BIGINT NOT NULL,
     -- Set once the source has been uploaded to the Files API. Kept so a resumed
     -- job references the file it already sent instead of uploading it again --
     -- and so the document block is byte-identical across attempts, which is
@@ -121,7 +148,7 @@ CREATE TABLE IF NOT EXISTS topic (
 -- The Card Ledger in embryo. `card_uuid` is passed to genanki as the note GUID,
 -- which is what makes a re-import update in place rather than duplicate.
 CREATE TABLE IF NOT EXISTS card (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     job_id            TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE,
     -- Not globally unique: a card that survives into a later Job keeps its
     -- uuid, because that identity is exactly what makes the re-import land
@@ -149,7 +176,7 @@ CREATE TABLE IF NOT EXISTS card (
     -- is an untouched note.
     last_exported_front  TEXT,
     last_exported_back   TEXT,
-    exported_at          REAL,
+    exported_at          TIMESTAMPTZ,
     -- What the model said this card revises, before the server checked it.
     -- Kept alongside the verdict so a rejected claim is visible rather than
     -- merely absent.
@@ -159,11 +186,15 @@ CREATE TABLE IF NOT EXISTS card (
     -- genuine duplicate from two questions that merely read alike is a
     -- judgement the user is better placed to make.
     duplicate_of         TEXT,
-    retired_at           REAL,
+    retired_at           TIMESTAMPTZ,
+    -- When somebody actually read this card on the review screen. Null until
+    -- they did, which is what lets a review of 164 cards be stopped half way
+    -- through and resumed.
+    reviewed_at          TIMESTAMPTZ,
     -- True when the model asked for a cloze card but gave no deletion marker.
     -- Kept rather than silently corrected: a topic that keeps doing this is a
     -- prompt problem, and hiding it hides the signal.
-    downgraded        INTEGER NOT NULL DEFAULT 0,
+    downgraded        BOOLEAN NOT NULL DEFAULT FALSE,
     position          INTEGER NOT NULL,
     UNIQUE (job_id, card_uuid)
 );
@@ -174,22 +205,22 @@ CREATE INDEX IF NOT EXISTS card_job_idx ON card(job_id, position);
 
 -- Progress, as a durable record rather than a live one. A row is appended in
 -- the same transaction as the change it reports, so an event exists exactly
--- when the change it describes survived — which is what lets a client that was
+-- when the change it describes survived -- which is what lets a client that was
 -- never connected reconstruct the whole run. `id` is the SSE event id, handed
 -- back by a reconnecting client as `Last-Event-ID`.
 CREATE TABLE IF NOT EXISTS job_event (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     job_id            TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE,
     kind              TEXT NOT NULL,
     data_json         TEXT NOT NULL,
-    created_at        REAL NOT NULL
+    created_at        TIMESTAMPTZ NOT NULL
 );
 
 -- One row per Anthropic call. Cost is derived from these rather than estimated,
 -- so "what did this job cost" is answered from what the API reported and not
 -- from what we hoped it would be.
 CREATE TABLE IF NOT EXISTS api_call (
-    id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     job_id                        TEXT NOT NULL REFERENCES job(id) ON DELETE CASCADE,
     pass_name                     TEXT NOT NULL,
     topic_id                      TEXT,
@@ -198,7 +229,7 @@ CREATE TABLE IF NOT EXISTS api_call (
     cache_creation_input_tokens   INTEGER NOT NULL DEFAULT 0,
     cache_read_input_tokens       INTEGER NOT NULL DEFAULT 0,
     output_tokens                 INTEGER NOT NULL DEFAULT 0,
-    created_at                    REAL NOT NULL
+    created_at                    TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS api_call_job_idx ON api_call(job_id, id);
@@ -207,79 +238,74 @@ CREATE INDEX IF NOT EXISTS job_event_job_idx ON job_event(job_id, id);
 """
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA foreign_keys = ON")
-    # The worker writes checkpoints on its own connection while requests read on
-    # theirs; without this a checkpoint racing a read fails instantly instead of
-    # waiting the few milliseconds the other statement needs.
-    conn.execute("PRAGMA busy_timeout = 5000")
-    return conn
+def dsn() -> str:
+    """Where the database is. One place reads the environment."""
+    return os.environ["AI_ANKI_DATABASE_URL"]
+
+
+def connect(url: str | None = None) -> psycopg.Connection:
+    """Open a connection shaped like the one the application already expects.
+
+    Autocommit, because the code opens connections per request and says
+    explicitly when something must be atomic -- the same contract the SQLite
+    module had, so `db.transaction` still means what it meant.
+    """
+    return psycopg.connect(url or dsn(), autocommit=True, row_factory=dict_row)
 
 
 @contextmanager
-def transaction(conn: sqlite3.Connection):
+def transaction(conn: psycopg.Connection):
     """Run a unit of work atomically.
 
-    Connections are opened in autocommit mode, so anything that must be
-    all-or-nothing — a checkpoint, an attempt claim — has to say so explicitly.
+    Plain `BEGIN`, where SQLite needed `BEGIN IMMEDIATE`. The escalation existed
+    to take the write lock up front, because SQLite would otherwise fail a
+    deferred transaction that turned out to want one. Postgres takes row locks
+    as it goes and has no such failure mode.
     """
-    conn.execute("BEGIN IMMEDIATE")
-    try:
+    with conn.transaction():
         yield conn
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    conn.execute("COMMIT")
 
 
-def backup_to(db_path: Path, destination: Path) -> int:
-    """Copy the database consistently while it is in use.
+def initialise(url: str | None = None) -> None:
+    conn = connect(url)
+    try:
+        conn.execute(SCHEMA)
+    finally:
+        conn.close()
 
-    `VACUUM INTO` takes its own read transaction, so the copy is a coherent
-    point-in-time image rather than a torn file — which a plain file copy of a
-    WAL-mode database is not.
+
+# --- the boundary between float seconds and real timestamps --------------
+#
+# The application's own vocabulary is float epoch seconds: a TTL is a number of
+# seconds, a lockout window is a number of seconds, and Anki's note modification
+# time is an epoch. The database's vocabulary is TIMESTAMPTZ. These two convert
+# between them, and they are the ONLY place that conversion happens -- which is
+# what makes "is this value a moment or a duration" answerable by reading one
+# line rather than by tracing a variable.
+
+
+def now() -> datetime:
+    """This moment, timezone-aware. Never `datetime.now()` without a tzinfo."""
+    return datetime.now(timezone.utc)
+
+
+def at(epoch: float) -> datetime:
+    """A float epoch, as the database wants to see it."""
+    return datetime.fromtimestamp(epoch, tz=timezone.utc)
+
+
+def epoch(moment: datetime | None) -> float | None:
+    """A stored moment, as the application's arithmetic wants to see it."""
+    return None if moment is None else moment.timestamp()
+
+
+def executemany(conn: psycopg.Connection, sql: str, params) -> None:
+    """Run one statement over many parameter sets.
+
+    psycopg puts `executemany` on the cursor rather than the connection, where
+    SQLite offered both. Four call sites want it, and none of them should have
+    to know that -- so it lives here rather than as a `with conn.cursor()` block
+    repeated four times.
     """
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        destination.unlink()
-    conn = connect(db_path)
-    try:
-        conn.execute("VACUUM INTO ?", (str(destination),))
-    finally:
-        conn.close()
-    return destination.stat().st_size
-
-
-# Columns added after a database was already in service. `CREATE TABLE IF NOT
-# EXISTS` does nothing to a table that exists, so a new column has to be added
-# explicitly or a live volume keeps the old shape for ever. Each is applied
-# once and ignored if it is already there; additive only, because a column drop
-# or a type change cannot be rolled forward safely on one machine with no
-# maintenance window.
-MIGRATIONS = [
-    # When somebody actually read this card. Null until they did, which is what
-    # lets a review of 164 cards be stopped half way through and resumed.
-    "ALTER TABLE card ADD COLUMN reviewed_at REAL",
-]
-
-
-def _migrate(conn: sqlite3.Connection) -> None:
-    for statement in MIGRATIONS:
-        try:
-            conn.execute(statement)
-        except sqlite3.OperationalError as exc:
-            if "duplicate column name" not in str(exc):
-                raise
-
-
-def initialise(db_path: Path) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = connect(db_path)
-    try:
-        conn.executescript(SCHEMA)
-        _migrate(conn)
-    finally:
-        conn.close()
+    with conn.cursor() as cursor:
+        cursor.executemany(sql, params)

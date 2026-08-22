@@ -32,7 +32,7 @@ class SessionRequest(BaseModel):
 
 
 def create_app(
-    db_path: Path,
+    database_url: str,
     data_dir: Path,
     anthropic_client: anthropic.Anthropic | None = None,
     provider=None,
@@ -52,7 +52,6 @@ def create_app(
     # than reaching for the environment.
     backup_destination: backup.Destination | None = None,
 ) -> FastAPI:
-    db_path = Path(db_path)
     data_dir = Path(data_dir)
     backup_destination = backup_destination or backup.destination_from_env()
     # A runtime secret, never baked in. Unset means nobody is the owner, which
@@ -67,13 +66,13 @@ def create_app(
             f"{provider.name}/{provider.model} cannot serve this workload: "
             + "; ".join(refusals)
         )
-    worker = worker_module.Worker(db_path, provider, drain_deadline_seconds=drain_deadline_seconds)
+    worker = worker_module.Worker(database_url, provider, drain_deadline_seconds=drain_deadline_seconds)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        db.initialise(db_path)
+        db.initialise(database_url)
         data_dir.mkdir(parents=True, exist_ok=True)
-        conn = db.connect(db_path)
+        conn = db.connect(database_url)
         try:
             # Whatever the last machine was doing when it went, it is not doing
             # it now.
@@ -88,7 +87,7 @@ def create_app(
         backups = None
         if backup_destination is not None:
             backups = asyncio.create_task(
-                backup.nightly(db_path, data_dir / "tmp", backup_destination)
+                backup.nightly(database_url, data_dir / "tmp", backup_destination)
             )
 
         yield
@@ -100,14 +99,14 @@ def create_app(
         await worker.drain()
 
     app = FastAPI(title="ai-anki", lifespan=lifespan)
-    app.add_middleware(auth.Guard, db_path=db_path, owner_token=owner_token)
+    app.add_middleware(auth.Guard, database_url=database_url, owner_token=owner_token)
 
     async def get_conn():
         # Async so the connection is created and used on the same thread. A sync
         # dependency would be resolved in a threadpool and then handed to the
         # event loop, which SQLite refuses. Statements here are sub-millisecond;
         # long-running work belongs in the worker, not in a request.
-        conn = db.connect(db_path)
+        conn = db.connect(database_url)
         try:
             yield conn
         finally:
@@ -312,7 +311,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found")
         return StreamingResponse(
             progress.stream(
-                db_path,
+                database_url,
                 job_id,
                 after_id=progress.last_event_id(request.headers.get("last-event-id")),
                 is_disconnected=request.is_disconnected,
@@ -381,23 +380,28 @@ def create_app(
     async def take_backup(conn=Depends(get_conn)):
         """Take a consistent copy while the application keeps running.
 
-        Off the platform when a bucket is configured, because a copy on the
-        same volume protects against nothing that actually happens. Onto the
-        volume otherwise, so the endpoint still does something useful before
-        object storage is set up.
+        Off the platform when a bucket is configured. Onto local disk otherwise,
+        so the endpoint still does something useful before object storage is set
+        up — and says plainly that a copy sitting next to the machine that made
+        it is not a backup.
+
+        The managed database takes its own point-in-time backups. This one is
+        vendor independence rather than redundancy: it is the copy that can
+        leave.
         """
         if backup_destination is not None:
             result = await asyncio.to_thread(
-                backup.run, db_path, data_dir / "tmp", backup_destination
+                backup.run, database_url, data_dir / "tmp", backup_destination
             )
             return {"destination": backup_destination.bucket, **result}
-        written = db.backup_to(db_path, data_dir / "backup.db")
+        local = data_dir / "backup.dump"
+        await asyncio.to_thread(backup.snapshot, database_url, local)
         return {
-            "path": str(data_dir / "backup.db"),
-            "bytes": written,
+            "path": str(local),
+            "bytes": local.stat().st_size,
             "warning": (
-                "on the same volume as the database it copies; set "
-                "AI_ANKI_BACKUP_BUCKET for an off-platform copy"
+                "written to local disk, not off-platform; set "
+                "AI_ANKI_BACKUP_BUCKET for a copy that survives losing this machine"
             ),
         }
 

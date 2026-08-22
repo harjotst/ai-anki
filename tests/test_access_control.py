@@ -130,7 +130,7 @@ def test_reading_from_another_site_is_not_treated_as_an_attack(client):
     assert client.get("/api/jobs/no-such-job", headers={"sec-fetch-site": "cross-site"}).status_code == 404
 
 
-def test_emptying_the_session_table_signs_everybody_out_at_once(boot, tmp_path):
+def test_emptying_the_session_table_signs_everybody_out_at_once(boot, pg_dsn):
     """The break-glass lever, exercised where it actually lives.
 
     This is the one test that touches the database directly rather than going
@@ -144,7 +144,7 @@ def test_emptying_the_session_table_signs_everybody_out_at_once(boot, tmp_path):
         sign_in_as(machine, alice)
         assert upload(machine).status_code == 201
 
-        conn = db.connect(tmp_path / "ai-anki.db")
+        conn = db.connect(pg_dsn)
         try:
             conn.execute("DELETE FROM session")
         finally:

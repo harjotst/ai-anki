@@ -5,15 +5,14 @@ application through HTTP and should not be able to tell which database answered
 — which is the property that made this migration possible at all.
 """
 
-import psycopg
 
-from app import db_pg
+from app import db
 
 
 def test_the_schema_initialises(pg_dsn):
-    db_pg.initialise(pg_dsn)
+    db.initialise(pg_dsn)
 
-    conn = db_pg.connect(pg_dsn)
+    conn = db.connect(pg_dsn)
     tables = {
         row["table_name"]
         for row in conn.execute(
@@ -29,8 +28,8 @@ def test_the_schema_initialises(pg_dsn):
 def test_rows_are_still_read_by_column_name(pg_dsn):
     """Ninety-five call sites do `row["column"]`. None of them should have had
     to care which database answered."""
-    db_pg.initialise(pg_dsn)
-    conn = db_pg.connect(pg_dsn)
+    db.initialise(pg_dsn)
+    conn = db.connect(pg_dsn)
 
     conn.execute(
         "INSERT INTO deck (id, name, created_at) VALUES (%s, %s, now())", ("d1", "Bio")
@@ -43,11 +42,11 @@ def test_rows_are_still_read_by_column_name(pg_dsn):
 
 
 def test_a_transaction_rolls_back_as_a_unit(pg_dsn):
-    db_pg.initialise(pg_dsn)
-    conn = db_pg.connect(pg_dsn)
+    db.initialise(pg_dsn)
+    conn = db.connect(pg_dsn)
 
     try:
-        with db_pg.transaction(conn):
+        with db.transaction(conn):
             conn.execute(
                 "INSERT INTO deck (id, name, created_at) VALUES (%s, %s, now())", ("d1", "Bio")
             )
@@ -67,8 +66,8 @@ def test_every_moment_in_time_is_timezone_aware(pg_dsn):
     what stops a timezone bug surfacing months later as a budget window
     resetting at the wrong hour.
     """
-    db_pg.initialise(pg_dsn)
-    conn = db_pg.connect(pg_dsn)
+    db.initialise(pg_dsn)
+    conn = db.connect(pg_dsn)
 
     conn.execute("INSERT INTO deck (id, name, created_at) VALUES ('d1', 'Bio', now())")
     created = conn.execute("SELECT created_at FROM deck").fetchone()["created_at"]
@@ -79,8 +78,8 @@ def test_every_moment_in_time_is_timezone_aware(pg_dsn):
 
 def test_identity_columns_hand_back_the_row_they_made(pg_dsn):
     """SQLite had `lastrowid`; Postgres has RETURNING, and five call sites need it."""
-    db_pg.initialise(pg_dsn)
-    conn = db_pg.connect(pg_dsn)
+    db.initialise(pg_dsn)
+    conn = db.connect(pg_dsn)
     conn.execute("INSERT INTO deck (id, name, created_at) VALUES ('d1', 'Bio', now())")
     conn.execute(
         "INSERT INTO job (id, deck_id, state) VALUES ('j1', 'd1', 'uploaded')"

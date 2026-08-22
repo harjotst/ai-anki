@@ -20,6 +20,10 @@ dependencies = [
     # mask drawn against unknown dimensions lands in the wrong place.
     "pypdfium2>=4.30",
     "pillow>=10.0",
+    # The datastore. Binary wheel so the image needs no build toolchain; the
+    # `pg_dump` the backup shells out to comes from the postgresql-client
+    # package in the Dockerfile, not from here.
+    "psycopg[binary]>=3.2",
     # Off-platform database backups to S3-compatible storage (Tigris on Fly).
     # boto3 rather than hand-rolled SigV4: signing is the part that is easy to
     # get subtly wrong and impossible to notice until a restore is needed.
@@ -39,7 +43,6 @@ dev = [
     "anki==26.8.1",
     # The datastore under the tests is a real Postgres in a container, not a
     # stand-in. A fake would let a query pass here that the real server rejects.
-    "psycopg[binary]>=3.2",
     "testcontainers[postgres]>=4.8",
 ]
 

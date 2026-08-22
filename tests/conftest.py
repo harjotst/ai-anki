@@ -216,7 +216,7 @@ def claude():
 
 
 @pytest.fixture
-def boot(tmp_path, claude):
+def boot(tmp_path, claude, pg_dsn):
     """Start an application over the volume.
 
     The database and data directory are the same on every call, so a second call
@@ -250,7 +250,7 @@ def boot(tmp_path, claude):
         settings.setdefault("owner_token", OWNER_TOKEN)
         return Machine(
             create_app(
-                db_path=tmp_path / "ai-anki.db",
+                database_url=pg_dsn,
                 data_dir=tmp_path / "data",
                 anthropic_client=claude.client(),
                 **settings,

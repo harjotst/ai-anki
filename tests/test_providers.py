@@ -256,7 +256,7 @@ CARDS = {"cards": [{
 
 
 @pytest.fixture
-def vendor_client(tmp_path):
+def vendor_client(tmp_path, pg_dsn):
     from fastapi.testclient import TestClient
 
     from app.main import create_app
@@ -264,7 +264,7 @@ def vendor_client(tmp_path):
 
     vendor = FakeVendor()
     app = create_app(
-        db_path=tmp_path / "db.sqlite", data_dir=tmp_path / "data",
+        database_url=pg_dsn, data_dir=tmp_path / "data",
         provider=vendor, owner_token=OWNER_TOKEN,
     )
     with TestClient(app, base_url="https://testserver") as client:
@@ -335,7 +335,7 @@ def test_cost_is_billed_at_the_active_providers_rates_not_anthropics(vendor_clie
     assert all(call["model"] == "fake-1" for call in usage["calls"])
 
 
-def test_a_provider_that_fails_the_gate_is_rejected_at_startup(tmp_path):
+def test_a_provider_that_fails_the_gate_is_rejected_at_startup(tmp_path, pg_dsn):
     from app.main import create_app
 
     crippled = FakeVendor()
@@ -346,7 +346,7 @@ def test_a_provider_that_fails_the_gate_is_rejected_at_startup(tmp_path):
 
     # Refused when the app is built, not discovered halfway through a paid job.
     with pytest.raises(ValueError, match="cannot serve this workload"):
-        create_app(db_path=tmp_path / "d.db", data_dir=tmp_path / "data", provider=crippled)
+        create_app(database_url=pg_dsn, data_dir=tmp_path / "data", provider=crippled)
 
 
 # --- counting a document that was uploaded rather than inlined -----------
