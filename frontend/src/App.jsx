@@ -4,9 +4,12 @@ import {
   api,
   configured,
   download,
+  identities,
+  linkIdentity,
   signInWith,
   signOut,
   supabase,
+  unlinkIdentity,
   upload,
 } from "./session";
 
@@ -138,7 +141,7 @@ const STATE_LABEL = {
   failed: "Failed",
 };
 
-function Home({ decks, jobs, friends, onOpen, onStarted, onRenamed, onSignOut, onStudy, onFriends, onShare }) {
+function Home({ decks, jobs, friends, onOpen, onStarted, onRenamed, onSignOut, onStudy, onFriends, onShare, onAccount }) {
   const unfinished = jobs.filter((job) => !["complete", "reviewing"].includes(job.state));
 
   return (
@@ -197,6 +200,9 @@ function Home({ decks, jobs, friends, onOpen, onStarted, onRenamed, onSignOut, o
       <div className="panel narrow signout">
         <button className="ghost" onClick={onFriends}>
           Studying together
+        </button>
+        <button className="ghost" onClick={onAccount}>
+          How you sign in
         </button>
         <button className="ghost" onClick={onSignOut}>
           Sign out
@@ -422,6 +428,108 @@ function PlanEditor({ jobId, plan, onApproved }) {
         </button>
       </div>
       {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+// --- how you get back in -------------------------------------------------
+
+const PROVIDERS = [
+  ["google", "Google"],
+  ["apple", "Apple"],
+];
+
+function Account({ onBack }) {
+  const [attached, setAttached] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setAttached(await identities());
+    } catch (problem) {
+      setError(problem.message);
+      setAttached([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  if (!attached) return <div className="panel narrow muted">Loading…</div>;
+
+  const have = new Set(attached.map((one) => one.provider));
+
+  const act = async (label, run) => {
+    setBusy(label);
+    setError(null);
+    try {
+      await run();
+      await refresh();
+    } catch (problem) {
+      setError(problem.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="panel narrow">
+      <h2>How you sign in</h2>
+      <p className="muted">
+        {/* The reason this screen exists, said where somebody would otherwise
+            find out by losing their decks. */}
+        Connect more than one and any of them gets you to this account. Apple in
+        particular can hide your real address behind a relay one, so signing in
+        with it separately would otherwise look like a different person.
+      </p>
+
+      <ul className="rows">
+        {PROVIDERS.map(([provider, label]) => {
+          const identity = attached.find((one) => one.provider === provider);
+          const last = attached.length <= 1;
+          return (
+            <li key={provider}>
+              <div className="row static">
+                <span className="row-main">{label}</span>
+                <span className="muted small">
+                  {identity ? identity.identity_data?.email || "connected" : "not connected"}
+                </span>
+                {identity ? (
+                  <button
+                    className="ghost danger"
+                    disabled={last || busy === provider}
+                    title={last ? "This is the only way into your account" : ""}
+                    onClick={() => act(provider, () => unlinkIdentity(identity))}
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    disabled={busy === provider}
+                    onClick={() => act(provider, () => linkIdentity(provider))}
+                  >
+                    {busy === provider ? "Opening…" : "Connect"}
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      {attached.length <= 1 && (
+        <p className="muted small">
+          The last one cannot be disconnected. An account with no way to sign into
+          it is an account nobody can reach, including you.
+        </p>
+      )}
+      {error && <p className="error">{error}</p>}
+
+      <button className="ghost" onClick={onBack}>
+        Back
+      </button>
     </div>
   );
 }
@@ -1298,6 +1406,7 @@ export default function App() {
   // the job state rather than inside it.
   const [studying, setStudying] = useState(null);
   const [friends, setFriends] = useState(false);
+  const [account, setAccount] = useState(false);
   // What this person already has. Loaded once past the door and refreshed
   // whenever they come back to it: the home screen is the only handle on a run
   // once its tab is gone.
@@ -1394,6 +1503,7 @@ export default function App() {
   if (session === undefined) return <div className="panel narrow muted">Loading…</div>;
   if (!session) return <SignIn />;
 
+  if (account) return <Account onBack={() => setAccount(false)} />;
   if (friends) return <Friends onBack={() => setFriends(false)} />;
 
   if (studying)
@@ -1424,6 +1534,7 @@ export default function App() {
           setStudying(deck);
         }}
         onFriends={() => setFriends(true)}
+        onAccount={() => setAccount(true)}
         onShare={async (deck, person) => {
           await api(`/api/decks/${deck.deck_id}/share`, {
             method: "POST",
