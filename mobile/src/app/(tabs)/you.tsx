@@ -5,7 +5,7 @@ import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
 import { View } from "react-native";
 import { cached } from "../../lib/data";
-import { signOut } from "../../lib/session";
+import { sessionKind, signOut } from "../../lib/session";
 import { space, type ThemeSetting, useThemeSetting } from "../../theme";
 import { Button, Cap, CardBox, ErrorCard, Screen, Seg, Skeleton, T } from "../../ui";
 
@@ -49,7 +49,9 @@ export default function You() {
         </View>
 
         <Cap style={{ paddingLeft: 2 }}>
-          Sign-in methods are managed on the web.
+          {sessionKind() === "dev"
+            ? "Signed in through the local development server. Sign out to reach the real sign-in screen."
+            : "Connecting extra sign-in methods is managed on the web."}
         </Cap>
 
         <Button title="Sign out" kind="ghost" onPress={async () => {

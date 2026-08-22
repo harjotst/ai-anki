@@ -1,13 +1,15 @@
 // Today: the only question a daily user has — what's due, and is the streak
 // safe. A native mirror of the web screen, fed by the same endpoints.
-import { useRouter } from "expo-router";
+import { type Href, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cached, dueCounts, heatCells, streakFrom } from "../../lib/data";
 import { radius, space, target, usePalette } from "../../theme";
-import { Button, Cap, CardBox, ErrorCard, IconBtn, NavRow, Pill, Skeleton, T, useToast } from "../../ui";
+import { Button, Cap, CardBox, ErrorCard, IconBtn, NavRow, Pill, Skeleton, T } from "../../ui";
 
+// The /job screens land in this same change set; the generated route types
+// refresh only when the dev server runs, hence the Href casts below.
 const NEEDS_YOU: Record<string, (job: any) => { line: string; action: string }> = {
   plan_ready: () => ({ line: "Plan ready", action: "Review plan" }),
   interrupted: () => ({ line: "Interrupted", action: "Resume" }),
@@ -60,7 +62,6 @@ function Heatmap({ days }: { days: any[] }) {
 
 export default function Today() {
   const router = useRouter();
-  const toast = useToast();
   const palette = usePalette();
   const [decks, setDecks] = useState<any[] | null>(null);
   const [counts, setCounts] = useState<Record<string, number | null>>({});
@@ -121,7 +122,7 @@ export default function Today() {
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
             <StreakChip activity={activity} />
             <IconBtn name="plus" label="Add a lecture"
-              onPress={() => toast("Uploading a lecture lands on mobile next — use the web app for now.")} />
+              onPress={() => router.push("/job/new" as Href)} />
           </View>
         </View>
 
@@ -134,7 +135,7 @@ export default function Today() {
               see and when; your job is only to show up.
             </T>
             <Button title="Upload a lecture"
-              onPress={() => toast("Uploading a lecture lands on mobile next — use the web app for now.")} />
+              onPress={() => router.push("/job/new" as Href)} />
           </CardBox>
         ) : (
           <CardBox style={{ padding: space[5] }}>
@@ -162,7 +163,7 @@ export default function Today() {
           const note = NEEDS_YOU[job.state](job);
           return (
             <Pressable key={job.job_id}
-              onPress={() => toast("Finish this on the web for now — job screens land on mobile next.")}
+              onPress={() => router.push(`/job/${job.job_id}` as Href)}
               style={{
                 flexDirection: "row", alignItems: "center", gap: space[3],
                 backgroundColor: palette.accentSoft, borderRadius: radius.md,

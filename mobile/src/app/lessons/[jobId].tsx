@@ -2,7 +2,7 @@
 // persists on the device (same key shape as the web's localStorage) so
 // reopening resumes where the person left off.
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { type Href, useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -110,8 +110,9 @@ export default function Lessons() {
   const advance = () => {
     markRead(lesson.topic_id);
     if (open < lessons.length - 1) setOpen(open + 1);
-    // The web continues to the job's card review; that screen is web-only.
-    else toast("Finish this on the web for now — job screens land on mobile next.");
+    // Href cast: the generated route types refresh only when the dev server
+    // runs, and the job screens land in this same change set.
+    else router.push(`/job/${jobId}/cards` as Href);
   };
 
   return (
