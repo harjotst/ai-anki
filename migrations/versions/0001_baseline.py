@@ -27,6 +27,7 @@ TABLES = (
     "api_call",
     "job_event",
     "lesson",
+    "friendship",
     "study_card",
     "review",
     "card",

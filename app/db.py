@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS account (
     -- SQL statement, because an in-app "make admin" button is a
     -- privilege-escalation feature nobody asked for.
     is_admin          BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Short, shareable, and how somebody is added as a friend. Deliberately
+    -- not their email: an endpoint that reports whether an address has an
+    -- account tells anybody whether an address has an account, one guess at a
+    -- time.
+    friend_code       TEXT UNIQUE,
     created_at        TIMESTAMPTZ NOT NULL
 );
 
@@ -252,6 +257,23 @@ CREATE TABLE IF NOT EXISTS study_card (
 );
 
 CREATE INDEX IF NOT EXISTS study_due_idx ON study_card(account_id, deck_id, due);
+
+-- One row per friendship, never two. Storing both directions means two rows
+-- that can disagree, and eventually they do: somebody removes a friend and half
+-- of it is left behind. The pair is ordered so the row is unique whichever way
+-- round it was created, and `requested_by` is what stops somebody accepting
+-- their own request.
+CREATE TABLE IF NOT EXISTS friendship (
+    account_low       UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    account_high      UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    state             TEXT NOT NULL,
+    requested_by      UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    created_at        TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (account_low, account_high),
+    CHECK (account_low < account_high)
+);
+
+CREATE INDEX IF NOT EXISTS friendship_high_idx ON friendship(account_high);
 
 -- Progress, as a durable record rather than a live one. A row is appended in
 -- the same transaction as the change it reports, so an event exists exactly
