@@ -4,13 +4,17 @@
 // ever seen — so being here means a real account is the only way forward.
 import React, { useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from "react-native";
-import { signInWithEmail, signInWithGoogle, signUpWithEmail } from "../lib/session";
+import { devAvailable, signInWithEmail, signInWithGoogle, signUpWithEmail, useDevData } from "../lib/session";
 import { configured } from "../lib/supabase";
 import { radius, space, usePalette } from "../theme";
 import { Button, Cap, T } from "../ui";
 
 export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   const palette = usePalette();
+  const [dev, setDev] = useState(false);
+  React.useEffect(() => {
+    devAvailable().then(setDev);
+  }, []);
   const [mode, setMode] = useState<"in" | "up">("in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -100,6 +104,10 @@ export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
               <View style={{ flex: 1, height: 1, backgroundColor: palette.border }} />
             </View>
             <Button title="Continue with Google" kind="ghost" onPress={google} disabled={busy} />
+            {dev && (
+              <Button title="Use local dev data" kind="ghost"
+                onPress={() => run(async () => { if (await useDevData()) onSignedIn(); })} />
+            )}
           </>
         ) : (
           <Cap>

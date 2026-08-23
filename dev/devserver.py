@@ -39,7 +39,11 @@ app = create_app(
 # and the token is only good against this process's throwaway key anyway.
 @app.get("/dev/token")
 def dev_token():
-    return {"token": token()}
+    from fastapi.responses import JSONResponse
+
+    # no-store, because in real mode this same path is answered by the SPA
+    # catch-all and a cached copy of that answer breaks the dev sign-in.
+    return JSONResponse({"token": token()}, headers={"cache-control": "no-store"})
 
 # Registered after the SPA catch-all, which would otherwise swallow it.
 app.router.routes.insert(0, app.router.routes.pop())

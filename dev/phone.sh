@@ -27,20 +27,17 @@ if [ "$free_gb" -lt 10 ]; then
 fi
 say "Disk: ${free_gb}GB free."
 
-# 2. The database, then the API that needs it.
-if ! docker ps --format '{{.Names}}' | grep -qx pgdev; then
-  say "Starting Postgres..."
-  docker start pgdev >/dev/null 2>&1 || docker run -d --name pgdev \
-    -e POSTGRES_PASSWORD=x -e POSTGRES_DB=aianki -p 55432:5432 postgres:17 >/dev/null
-  sleep 3
-fi
-if ! curl -sf "$API/dev/token" >/dev/null; then
+# 2. The API. (Real mode talks to hosted Postgres; pgdev is only for the
+#    dev harness and tests, so it is not started here.)
+status=$(curl -s -o /dev/null -w "%{http_code}" "$API/api/decks" || echo 000)
+if [ "$status" = "000" ]; then
   bad "The API is not answering on $API."
-  echo "  Start it from the editor's launch config (ai-anki), or:"
-  echo "  AI_ANKI_DATABASE_URL=postgresql://postgres:x@127.0.0.1:55432/aianki .venv/bin/python dev/devserver.py"
+  echo "  Real mode (your account): start the ai-anki-supabase launch config, or"
+  echo "    set -a; source .env; set +a; .venv/bin/uvicorn app.asgi:app --port 8080"
+  echo "  Dev mode (throwaway data): the ai-anki launch config."
   exit 1
 fi
-say "API: up."
+say "API: up (HTTP $status without a token is expected)."
 
 # 3. The simulator, booted and verified still alive -- a boot that reports
 #    success and dies is the failure this whole script exists to catch.

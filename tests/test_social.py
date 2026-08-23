@@ -288,3 +288,53 @@ def test_accepting_a_request_nobody_made_is_refused(boot):
         refused = machine.post(f"/api/friends/{SOMEBODY_ELSE}/accept")
 
         assert refused.status_code == 404
+
+
+# --- usernames ------------------------------------------------------------
+
+
+def test_a_username_is_claimed_normalised_and_shown(client):
+    claimed = client.patch("/api/me", json={"username": "  HarJot_22 "})
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["username"] == "harjot_22", "lowercased and trimmed"
+    assert client.get("/api/me").json()["username"] == "harjot_22"
+
+
+def test_a_username_the_system_will_not_print(client):
+    for bad in ["ab", "x" * 21, "har jot", "har@jot", ""]:
+        refused = client.patch("/api/me", json={"username": bad})
+        assert refused.status_code == 422, f"{bad!r}: {refused.text}"
+
+
+def test_a_taken_username_is_taken_in_any_case(boot):
+    with boot() as machine:
+        machine.sign_in_as(SOMEBODY_ELSE)
+        machine.patch("/api/me", json={"username": "maya"})
+        machine.sign_in_as(TESTER)
+        refused = machine.patch("/api/me", json={"username": "MAYA"})
+        assert refused.status_code == 409, refused.text
+
+
+def test_a_username_is_how_a_friend_finds_you(boot):
+    """The public handle replaces the code as the human path — the code
+    still works, but nobody should have to say 'friend code' out loud."""
+    with boot() as machine:
+        machine.sign_in_as(SOMEBODY_ELSE)
+        machine.patch("/api/me", json={"username": "maya"})
+        machine.sign_in_as(TESTER)
+        asked = machine.post("/api/friends", json={"username": "@Maya"})
+        assert asked.status_code == 200, asked.text
+
+        machine.sign_in_as(SOMEBODY_ELSE)
+        incoming = machine.get("/api/friends").json()["incoming"]
+        assert len(incoming) == 1
+
+        machine.post(f"/api/friends/{TESTER}/accept")
+        board = machine.get("/api/leaderboard").json()
+        by_id = {row["account_id"]: row for row in board["rows"]}
+        assert by_id[str(machine.get("/api/me").json()["account_id"])]["username"] == "maya"
+
+
+def test_a_typo_username_is_a_404_not_an_invitation(client):
+    missed = client.post("/api/friends", json={"username": "nobody_here"})
+    assert missed.status_code == 404

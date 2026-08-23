@@ -326,6 +326,13 @@ CREATE TABLE IF NOT EXISTS api_call (
 CREATE INDEX IF NOT EXISTS api_call_job_idx ON api_call(job_id, id);
 
 CREATE INDEX IF NOT EXISTS job_event_job_idx ON job_event(job_id, id);
+
+-- Additive changes to tables that already exist somewhere. The CREATEs above
+-- only shape a fresh database; a deployed one needs the same end state.
+ALTER TABLE account ADD COLUMN IF NOT EXISTS username TEXT;
+
+-- Unique case-insensitively: @Harjot and @harjot are one person or a scam.
+CREATE UNIQUE INDEX IF NOT EXISTS account_username_idx ON account(lower(username));
 """
 
 

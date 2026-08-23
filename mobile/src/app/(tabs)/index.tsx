@@ -38,20 +38,37 @@ export function StreakChip({ activity, now = new Date() }: { activity: any; now?
   );
 }
 
+// A month of activity at phone size: four Monday-aligned weeks ending today.
+// 84 micro-cells read as noise on a phone; 28 large ones read as a calendar.
 function Heatmap({ days }: { days: any[] }) {
   const palette = usePalette();
   const heat = [palette.heat0, palette.heat1, palette.heat2, palette.heat3, palette.heat4];
-  const cells = heatCells(days);
-  const weeks: (typeof cells)[] = [];
-  for (let w = 0; w < cells.length / 7; w++) weeks.push(cells.slice(w * 7, w * 7 + 7));
+  const all = heatCells(days); // web's bucketing, today last — sliced, not redone
+  const today = all[all.length - 1];
+  // Column under the Mon-first header, derived from the cell's own key so the
+  // grid cannot drift from the UTC days the data is bucketed in.
+  const col = (day: string) => (new Date(day).getUTCDay() + 6) % 7;
+  const future = 6 - col(today.day); // blanks after today in the final week
+  const cells: ((typeof all)[number] | null)[] = [
+    ...all.slice(all.length - (28 - future)),
+    ...Array(future).fill(null),
+  ];
+  const rows = [0, 1, 2, 3].map((r) => cells.slice(r * 7, r * 7 + 7));
   return (
-    <View style={{ flexDirection: "row", gap: 3 }}>
-      {weeks.map((week, i) => (
-        <View key={i} style={{ flex: 1, gap: 3 }}>
-          {week.map((cell) => (
-            <View key={cell.day} style={{
-              width: "100%", aspectRatio: 1, borderRadius: 3,
-              backgroundColor: heat[cell.level],
+    <View style={{ gap: 5 }}>
+      <View style={{ flexDirection: "row", gap: 5 }}>
+        {["M", "T", "W", "T", "F", "S", "S"].map((initial, i) => (
+          <Cap key={i} style={{ flex: 1, textAlign: "center" }}>{initial}</Cap>
+        ))}
+      </View>
+      {rows.map((row, r) => (
+        <View key={r} style={{ flexDirection: "row", gap: 5 }}>
+          {row.map((cell, c) => (
+            <View key={cell ? cell.day : `pad${c}`} style={{
+              flex: 1, aspectRatio: 1, borderRadius: radius.sm,
+              backgroundColor: cell ? heat[cell.level] : undefined,
+              borderWidth: cell && cell.day === today.day ? 2 : 0,
+              borderColor: palette.accent,
             }} />
           ))}
         </View>
@@ -109,6 +126,7 @@ export default function Today() {
     const weekReviews = (activity?.days || [])
       .filter((d: any) => Date.now() - new Date(d.day).getTime() < 7 * 86_400_000)
       .reduce((sum: number, d: any) => sum + d.reviews, 0);
+    const { streak } = streakFrom(activity?.days || []);
     const firstRun = decks.length === 0;
     const sorted = [...decks].sort((a, b) => (counts[b.deck_id] || 0) - (counts[a.deck_id] || 0));
 
@@ -187,6 +205,9 @@ export default function Today() {
               <Cap>{weekReviews} reviews this week</Cap>
             </View>
             <Heatmap days={activity.days} />
+            {streak > 0 && (
+              <Cap>{streak} day{streak === 1 ? "" : "s"} in a row</Cap>
+            )}
           </CardBox>
         )}
 

@@ -1,10 +1,11 @@
-// The root: theme, toasts, and the session gate. In development the gate
-// is quiet — the app signs itself in against the dev server's published
-// token; anywhere else it is the real sign-in screen.
+// The root: theme, toasts, and the session gate. A real session beats the
+// dev bypass, an explicit sign-out sticks, and a fresh account picks its
+// public handle before it meets the tabs.
 import { Stack } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { StatusBar, View } from "react-native";
-import { loadSession, SessionKind, subscribeSession } from "../lib/session";
+import { api, loadSession, SessionKind, subscribeSession } from "../lib/session";
+import ClaimUsername from "../screens/claim-username";
 import SignIn from "../screens/sign-in";
 import { ThemeProvider, usePalette } from "../theme";
 import { ToastHost } from "../ui";
@@ -12,17 +13,32 @@ import { ToastHost } from "../ui";
 function Gate() {
   const palette = usePalette();
   const [kind, setKind] = useState<SessionKind | undefined>(undefined);
+  const [needsName, setNeedsName] = useState<boolean | undefined>(undefined);
 
-  useEffect(() => {
-    loadSession().then(setKind);
-    return subscribeSession(setKind);
+  const check = useCallback(async (next: SessionKind) => {
+    setKind(next);
+    if (!next) return setNeedsName(undefined);
+    try {
+      const me = await api("/api/me");
+      setNeedsName(!me.username);
+    } catch {
+      setNeedsName(false); // the tabs surface API trouble better than a gate
+    }
   }, []);
 
-  if (kind === undefined) {
+  useEffect(() => {
+    loadSession().then(check);
+    return subscribeSession(check);
+  }, [check]);
+
+  if (kind === undefined || (kind && needsName === undefined)) {
     return <View style={{ flex: 1, backgroundColor: palette.bg }} />;
   }
   if (kind === null) {
-    return <SignIn onSignedIn={() => loadSession().then(setKind)} />;
+    return <SignIn onSignedIn={() => loadSession().then(check)} />;
+  }
+  if (needsName) {
+    return <ClaimUsername onDone={() => setNeedsName(false)} />;
   }
   return (
     <Stack screenOptions={{ headerShown: false }}>

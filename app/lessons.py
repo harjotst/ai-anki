@@ -81,15 +81,19 @@ LESSON_SCHEMA = {
         "why_it_matters": {
             "type": "string",
             "description": (
-                "Why somebody studying this course needs it — what it explains or "
-                "makes possible. Not a restatement of the definition."
+                "Why somebody studying this course needs it, in at most 35 words "
+                "— a clinical or exam hook, not a restatement of the definition."
             ),
         },
         "sections": {
             "type": "array",
+            "minItems": 2,
+            "maxItems": 4,
             "description": (
                 "The concepts, in the order they have to be learned. Each one may "
-                "assume only what came before it."
+                "assume only what came before it. Two to four, never more: a "
+                "lesson is the skeleton the reader hangs the source on, not a "
+                "replacement for it."
             ),
             "items": {
                 "type": "object",
@@ -100,8 +104,10 @@ LESSON_SCHEMA = {
                     "body": {
                         "type": "string",
                         "description": (
-                            "Two to four short paragraphs. Explain the mechanism, not "
-                            "only the name of it."
+                            "One idea, at most 80 words, in short sentences. Explain "
+                            "the mechanism, not only the name of it. If a sentence "
+                            "could be deleted without the reader losing the mechanism, "
+                            "delete it."
                         ),
                     },
                     "builds_on": {
@@ -132,6 +138,7 @@ LESSON_SCHEMA = {
         },
         "misconceptions": {
             "type": "array",
+            "maxItems": 2,
             "description": (
                 "What people actually get wrong here. This is the part a textbook "
                 "does badly and the part worth the most: a belief named and "
@@ -152,6 +159,8 @@ LESSON_SCHEMA = {
         },
         "check_yourself": {
             "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
             "items": {"type": "string"},
             "description": (
                 "Questions to answer before moving to the cards. They test "
@@ -167,12 +176,20 @@ def build_lesson_request(documents: list[dict], topic: dict, provider) -> dict:
     claims = topic.get("claims") or []
     instruction = (
         f"Teach one topic, and only this one: {topic['path']}\n\n"
-        "Write it for somebody who has the material in front of them and has not "
-        "understood it yet. They will be given flashcards on this topic "
-        "afterwards; your job is to make those cards a reminder of something "
-        "they already grasp rather than a set of facts to memorise cold.\n\n"
-        "Explain mechanisms, not labels. Where the material states that "
-        "something happens, say why it happens.\n\n"
+        "Write it for somebody reading on a phone between classes. They have "
+        "the source material; they need the shape of it, not a second copy. "
+        "The whole lesson must come in under 300 words — a hard budget, not a "
+        "suggestion. Every sentence either explains a mechanism or anchors a "
+        "memory; anything a reader could skip without losing the mechanism is "
+        "over budget.\n\n"
+        "Stay inside the source. Teach only what this material actually covers "
+        "about the topic — no background it skipped, no depth it did not reach, "
+        "no adjacent facts however standard. The lecturer chose this scope; "
+        "exceeding it buries what the reader will be examined on under what "
+        "they will not.\n\n"
+        "They will be given flashcards on this topic afterwards; your job is to "
+        "make those cards a reminder of something they already grasp rather "
+        "than a set of facts to memorise cold.\n\n"
         f"Difficulty: {str(topic.get('difficulty', 'medium')).lower()}. Pitch the "
         "depth to that, but never the clarity.\n\n"
         "Cover only this topic. Other topics in this deck are being taught "
