@@ -12,8 +12,8 @@ import { Animated, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { radius, space, target, usePalette } from "../theme";
 import { Button, Cap, Icon, IconBtn, T } from "./index";
-import { ReadAloud } from "./read-aloud";
-import { Sci } from "./sci";
+import { ReadAloudBar, useReadAloud } from "./read-aloud";
+import { Sci, SciText } from "./sci";
 
 // The web's 17px/1.6 reading measure; T's body variant is a step smaller.
 const prose = { fontSize: 17, lineHeight: 27 };
@@ -72,7 +72,6 @@ export function LessonSteps({
 
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
-  const [listening, setListening] = useState(false);
   const at = Math.min(index, steps.length - 1);
   const step = steps[at];
   const isRevealed = revealed.has(at);
@@ -97,24 +96,26 @@ export function LessonSteps({
     setIndex(Math.min(at + 1, steps.length - 1));
   };
 
-  const readable = (() => {
+  const parts = useMemo<string[]>(() => {
     switch (step.kind) {
       case "hook":
-        return `${title}. ${lesson.in_one_line} ${lesson.why_it_matters}`;
+        return [lesson.in_one_line, lesson.why_it_matters];
       case "section":
-        return `${step.heading}. ${step.body}`;
+        return [step.heading, step.body];
       case "example":
-        return isRevealed ? `${step.problem} ${step.walkthrough}` : step.problem;
-      case "trap":
-        return isRevealed
-          ? `People get this wrong: ${step.belief}. ${step.correction}`
-          : `People get this wrong: ${step.belief}`;
+        return isRevealed ? [step.problem, step.walkthrough] : [step.problem];
+      case "trap": {
+        const belief = `“${step.belief}”`;
+        return isRevealed ? [belief, step.correction] : [belief];
+      }
       case "check":
-        return `Check yourself. ${step.question} Answer it in your head first.`;
+        return [step.question];
       case "done":
-        return "";
+        return [];
     }
-  })();
+  }, [step, lesson, isRevealed]);
+  const voice = useReadAloud(parts);
+  const lit = (part: number) => voice.highlightFor(part);
 
   const body = (() => {
     switch (step.kind) {
@@ -122,32 +123,37 @@ export function LessonSteps({
         return (
           <>
             <Cap style={{ letterSpacing: 0.7 }}>{title}</Cap>
-            <Sci text={lesson.in_one_line} style={{ fontSize: 22, lineHeight: 28, fontWeight: "600", color: palette.text }} />
-            <Sci text={lesson.why_it_matters}
+            <SciText text={lesson.in_one_line} highlight={lit(0)} accentSoft={palette.accentSoft} accent={palette.accent}
+              style={{ fontSize: 22, lineHeight: 28, fontWeight: "600", color: palette.text }} />
+            <SciText text={lesson.why_it_matters} highlight={lit(1)} accentSoft={palette.accentSoft} accent={palette.accent}
               style={{ fontSize: 15, lineHeight: 23, color: palette.text2 }} />
           </>
         );
       case "section":
         return (
           <>
-            <Sci text={step.heading} style={{ fontSize: 22, lineHeight: 28, fontWeight: "600", color: palette.text }} />
+            <SciText text={step.heading} highlight={lit(0)} accentSoft={palette.accentSoft} accent={palette.accent}
+              style={{ fontSize: 22, lineHeight: 28, fontWeight: "600", color: palette.text }} />
             {step.builds_on && (
               <Cap style={{ fontStyle: "italic", marginTop: -space[1] }}>
                 Builds on: {step.builds_on}
               </Cap>
             )}
-            <Sci text={step.body} style={{ ...prose, color: palette.text }} />
+            <SciText text={step.body} highlight={lit(1)} accentSoft={palette.accentSoft} accent={palette.accent}
+              style={{ ...prose, color: palette.text }} />
           </>
         );
       case "example":
         return (
           <>
             <Cap style={{ letterSpacing: 0.7 }}>WORKED EXAMPLE</Cap>
-            <Sci text={step.problem} style={{ ...prose, fontWeight: "600", color: palette.text }} />
+            <SciText text={step.problem} highlight={lit(0)} accentSoft={palette.accentSoft} accent={palette.accent}
+              style={{ ...prose, fontWeight: "600", color: palette.text }} />
             {isRevealed && (
               <>
                 <View style={{ height: 1, backgroundColor: palette.border }} />
-                <Sci text={step.walkthrough} style={{ ...prose, color: palette.text }} />
+                <SciText text={step.walkthrough} highlight={lit(1)} accentSoft={palette.accentSoft} accent={palette.accent}
+                  style={{ ...prose, color: palette.text }} />
               </>
             )}
           </>
@@ -156,11 +162,13 @@ export function LessonSteps({
         return (
           <>
             <Cap style={{ letterSpacing: 0.7 }}>PEOPLE GET THIS WRONG</Cap>
-            <Sci text={`“${step.belief}”`} style={{ ...focal, color: palette.text }} />
+            <SciText text={`“${step.belief}”`} highlight={lit(0)} accentSoft={palette.accentSoft} accent={palette.accent}
+              style={{ ...focal, color: palette.text }} />
             {isRevealed && (
               <>
                 <View style={{ height: 1, backgroundColor: palette.border }} />
-                <Sci text={step.correction} style={{ ...prose, color: palette.text }} />
+                <SciText text={step.correction} highlight={lit(1)} accentSoft={palette.accentSoft} accent={palette.accent}
+                  style={{ ...prose, color: palette.text }} />
               </>
             )}
           </>
@@ -169,7 +177,8 @@ export function LessonSteps({
         return (
           <>
             <Cap style={{ letterSpacing: 0.7 }}>CHECK YOURSELF</Cap>
-            <Sci text={step.question} style={{ ...focal, color: palette.text }} />
+            <SciText text={step.question} highlight={lit(0)} accentSoft={palette.accentSoft} accent={palette.accent}
+              style={{ ...focal, color: palette.text }} />
             <T v="secondary" color={palette.muted} style={{ fontStyle: "italic" }}>
               Answer it in your head first
             </T>
@@ -200,9 +209,10 @@ export function LessonSteps({
         <IconBtn name="chevL" label="Back"
           onPress={() => (at === 0 ? onExit() : setIndex(at - 1))} />
         {step.kind !== "done" ? (
-          <IconBtn name="sound" label={listening ? "Stop listening" : "Read this to me"}
-            color={listening ? palette.accent : palette.text2}
-            onPress={() => setListening((was) => !was)} />
+          <IconBtn name={voice.state === "playing" ? "pause" : "sound"}
+            label={voice.state === "playing" ? "Pause" : "Read this to me"}
+            color={voice.active ? palette.accent : palette.text2}
+            onPress={voice.toggle} />
         ) : (
           <View style={{ width: target.min }} />
         )}
@@ -238,16 +248,13 @@ export function LessonSteps({
           }}
         >
           <View style={{ maxWidth: MEASURE, width: "100%", gap: space[3] }}>
-            {listening && step.kind !== "done" ? (
-              <ReadAloud key={`${at}:${isRevealed ? 1 : 0}`} text={readable} />
-            ) : (
-              body
-            )}
+            {body}
           </View>
         </ScrollView>
       </Animated.View>
 
       <View style={{ paddingHorizontal: space[3], gap: space[2] }}>
+        {voice.active && step.kind !== "done" && <ReadAloudBar ctl={voice} />}
         {step.kind === "done" && (
           <Button title="Read again" kind="ghost"
             onPress={() => { setRevealed(new Set()); setIndex(0); }} />

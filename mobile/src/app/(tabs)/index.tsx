@@ -2,9 +2,9 @@
 // safe. A native mirror of the web screen, fed by the same endpoints.
 import { type Href, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, View } from "react-native";
+import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { cached, dueCounts, heatCells, streakFrom } from "../../lib/data";
+import { cached, dueCounts, localDay, streakFrom } from "../../lib/data";
 import { radius, space, target, usePalette } from "../../theme";
 import { Button, Cap, CardBox, ErrorCard, IconBtn, NavRow, Pill, Skeleton, T } from "../../ui";
 
@@ -40,39 +40,67 @@ export function StreakChip({ activity, now = new Date() }: { activity: any; now?
 
 // A month of activity at phone size: four Monday-aligned weeks ending today.
 // 84 micro-cells read as noise on a phone; 28 large ones read as a calendar.
-function Heatmap({ days }: { days: any[] }) {
+function MonthCalendar({ days }: { days: any[] }) {
   const palette = usePalette();
-  const heat = [palette.heat0, palette.heat1, palette.heat2, palette.heat3, palette.heat4];
-  const all = heatCells(days); // web's bucketing, today last — sliced, not redone
-  const today = all[all.length - 1];
-  // Column under the Mon-first header, derived from the cell's own key so the
-  // grid cannot drift from the UTC days the data is bucketed in.
-  const col = (day: string) => (new Date(day).getUTCDay() + 6) % 7;
-  const future = 6 - col(today.day); // blanks after today in the final week
-  const cells: ((typeof all)[number] | null)[] = [
-    ...all.slice(all.length - (28 - future)),
-    ...Array(future).fill(null),
+  const byDay = Object.fromEntries(days.map((d: any) => [d.day, d.reviews]));
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const todayKey = localDay(now);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  // Monday-first column of the 1st, then the month laid out week by week —
+  // the same shape as the calendar on the wall, because that is the shape
+  // people already know how to read.
+  const lead = (new Date(year, month, 1).getDay() + 6) % 7;
+  const cells: (number | null)[] = [
+    ...Array(lead).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
-  const rows = [0, 1, 2, 3].map((r) => cells.slice(r * 7, r * 7 + 7));
+  while (cells.length % 7) cells.push(null);
+  const weeks: (number | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+
+  const keyOf = (day: number) =>
+    `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
   return (
-    <View style={{ gap: 5 }}>
+    <View style={{ gap: 6 }}>
       <View style={{ flexDirection: "row", gap: 5 }}>
         {["M", "T", "W", "T", "F", "S", "S"].map((initial, i) => (
           <Cap key={i} style={{ flex: 1, textAlign: "center" }}>{initial}</Cap>
         ))}
       </View>
-      {rows.map((row, r) => (
+      {weeks.map((week, r) => (
         <View key={r} style={{ flexDirection: "row", gap: 5 }}>
-          {row.map((cell, c) => (
-            <View key={cell ? cell.day : `pad${c}`} style={{
-              flex: 1, aspectRatio: 1, borderRadius: radius.sm,
-              backgroundColor: cell ? heat[cell.level] : undefined,
-              borderWidth: cell && cell.day === today.day ? 2 : 0,
-              borderColor: palette.accent,
-            }} />
-          ))}
+          {week.map((day, c) => {
+            if (day === null) return <View key={`pad${c}`} style={{ flex: 1, aspectRatio: 1 }} />;
+            const key = keyOf(day);
+            const reviews = byDay[key] || 0;
+            // Two shades, not five: studied, and studied a lot. A ramp nobody
+            // can decode is decoration; two states are legible at a glance.
+            const big = reviews >= 15;
+            const some = reviews > 0;
+            const isToday = key === todayKey;
+            return (
+              <View key={key} style={{
+                flex: 1, aspectRatio: 1, borderRadius: radius.sm,
+                alignItems: "center", justifyContent: "center",
+                backgroundColor: big ? palette.accent : some ? palette.accentSoft : undefined,
+                borderWidth: isToday ? 2 : 0, borderColor: palette.accent,
+              }}>
+                <Text style={{
+                  fontSize: 13, fontVariant: ["tabular-nums"],
+                  fontWeight: isToday || big ? "600" : "400",
+                  color: big ? palette.onAccent : some ? palette.accent : palette.text2,
+                }}>
+                  {day}
+                </Text>
+              </View>
+            );
+          })}
         </View>
       ))}
+      <Cap style={{ textAlign: "center" }}>tinted · studied      solid · 15+ reviews</Cap>
     </View>
   );
 }
@@ -95,7 +123,7 @@ export default function Today() {
       const [deckList, jobs, act] = await Promise.all([
         cached("/api/decks", 30_000),
         cached("/api/jobs", 30_000),
-        cached("/api/me/activity", 60_000),
+        cached(`/api/me/activity?tz_offset=${-new Date().getTimezoneOffset()}`, 60_000),
       ]);
       setDecks(deckList.decks);
       setActivity(act);
@@ -201,10 +229,10 @@ export default function Today() {
         {activity && activity.days?.length > 0 && (
           <CardBox style={{ gap: space[3] }}>
             <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between" }}>
-              <T v="heading">Activity</T>
+              <T v="heading">{new Date().toLocaleDateString(undefined, { month: "long" })}</T>
               <Cap>{weekReviews} reviews this week</Cap>
             </View>
-            <Heatmap days={activity.days} />
+            <MonthCalendar days={activity.days} />
             {streak > 0 && (
               <Cap>{streak} day{streak === 1 ? "" : "s"} in a row</Cap>
             )}

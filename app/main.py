@@ -17,7 +17,7 @@ import anthropic
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
-from app import auth, backup, budget, db, generation, identity, ingestion
+from app import auth, backup, budget, db, generation, identity, importing, ingestion
 from app import jobs, ledger, packaging, planning, progress, providers, social, study
 from app import worker as worker_module
 
@@ -678,6 +678,24 @@ def create_app(
 
     # --- friends, and competing with them --------------------------------
 
+    @app.post("/api/decks/import")
+    async def import_deck(
+        file: UploadFile,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        """Bring an existing Anki deck in. Its notes keep their guids, so a
+        later export updates the person's Anki collection in place."""
+        content = await file.read()
+        try:
+            with db.transaction(conn):
+                result = importing.import_apkg(
+                    conn, account.id, content, file.filename or "deck.apkg"
+                )
+        except importing.NotAnApkg as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return result
+
     @app.get("/api/me")
     async def read_me(
         conn=Depends(get_conn), account: identity.Account = Depends(account_of)
@@ -834,9 +852,13 @@ def create_app(
 
     @app.get("/api/me/activity")
     async def read_activity(
-        conn=Depends(get_conn), account: identity.Account = Depends(account_of)
+        tz_offset: int = Query(default=0),
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
     ):
-        return study.activity(conn, account.id)
+        """`tz_offset`: the caller's minutes east of UTC, so a late-night
+        review lands on the day the person was actually living in."""
+        return study.activity(conn, account.id, tz_offset_minutes=tz_offset)
 
     @app.get("/api/jobs/{job_id}/lessons")
     async def read_lessons(

@@ -30,9 +30,18 @@ export async function dueCounts(decks: { deck_id: string }[]) {
   return counts;
 }
 
+/** The device's own calendar date — days from the server are bucketed in
+ *  this timezone too, so the two always name the same square. */
+export function localDay(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 export function streakFrom(days: { day: string }[], now = new Date()) {
   const studied = new Set(days.map((d) => d.day));
-  const iso = (date: Date) => date.toISOString().slice(0, 10);
+  const iso = localDay;
   const dayBefore = (date: Date) => new Date(date.getTime() - 86_400_000);
 
   const today = iso(now);
@@ -70,7 +79,7 @@ export function heatCells(days: { day: string; reviews: number }[], now = new Da
   const cells: { day: string; count: number; level: number }[] = [];
   for (let back = total - 1; back >= 0; back--) {
     const date = new Date(now.getTime() - back * 86_400_000);
-    const key = date.toISOString().slice(0, 10);
+    const key = localDay(date);
     const count = byDay[key] || 0;
     const level = count === 0 ? 0 : count < 5 ? 1 : count < 15 ? 2 : count < 40 ? 3 : 4;
     cells.push({ day: key, count, level });

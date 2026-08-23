@@ -344,17 +344,29 @@ def mastery(
     }
 
 
-def activity(conn: psycopg.Connection, account_id: str) -> dict:
+def activity(
+    conn: psycopg.Connection, account_id: str, tz_offset_minutes: int = 0
+) -> dict:
     """How much work somebody has done. A volume measure, and labelled as one.
 
     It is what people enjoy competing on, and it says nothing about how much
     they know — that is what mastery is for.
+
+    Days are bucketed in the CALLER's timezone, passed as minutes east of
+    UTC. Bucketing in UTC put an evening review on tomorrow's square for
+    everyone west of Greenwich — studying at 11 pm and watching a different
+    day light up is the kind of wrong that erodes trust in the whole screen.
+    The offset is clamped to the real range of timezones; it shifts only how
+    moments group into days, never the moments themselves.
     """
+    offset = max(-14 * 60, min(14 * 60, int(tz_offset_minutes)))
+    shift = f"{offset} minutes"
     row = conn.execute(
         "SELECT COUNT(*) AS reviews, COUNT(DISTINCT card_uuid) AS cards_seen,"
-        "       COUNT(DISTINCT date_trunc('day', reviewed_at)) AS days_studied"
+        "       COUNT(DISTINCT date_trunc('day', reviewed_at + %s::interval))"
+        "         AS days_studied"
         "  FROM review WHERE account_id = %s",
-        (account_id,),
+        (shift, account_id),
     ).fetchone()
     # Per-day history, most recent first. The heatmap, the streak ring and
     # banked rest days are all derived from which days somebody studied, and
@@ -362,10 +374,11 @@ def activity(conn: psycopg.Connection, account_id: str) -> dict:
     # than zero-filled: the client knows the calendar; the server only knows
     # what happened.
     days = conn.execute(
-        "SELECT date_trunc('day', reviewed_at)::date AS day, COUNT(*) AS reviews"
+        "SELECT date_trunc('day', reviewed_at + %s::interval)::date AS day,"
+        "       COUNT(*) AS reviews"
         "  FROM review WHERE account_id = %s"
         " GROUP BY 1 ORDER BY 1 DESC LIMIT 120",
-        (account_id,),
+        (shift, account_id),
     ).fetchall()
     return {
         "reviews": row["reviews"],

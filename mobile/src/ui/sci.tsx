@@ -160,3 +160,84 @@ export function Sci({ text, style, subScale = 0.72 }: {
     </Text>
   );
 }
+
+
+// --- word-level rendering, for a voice to follow -------------------------
+
+export type SciWord = { pieces: Piece[]; spoken: string };
+
+/** Display words: pieces grouped between whitespace, sub/superscripts glued
+ *  to the word they belong to. Each word knows how it is said aloud, which
+ *  is what keeps the highlight aligned with the voice — the screen shows
+ *  $V_{max}$ as one word even though the voice says two. */
+export function sciWords(text: string): SciWord[] {
+  const words: SciWord[] = [];
+  let current: Piece[] = [];
+  const flush = () => {
+    if (!current.length) return;
+    const joined = current.map((piece) => piece.text).join("");
+    words.push({ pieces: current, spoken: speakableWord(joined) });
+    current = [];
+  };
+  for (const piece of sciPieces(text)) {
+    if (piece.kind !== "plain") {
+      current.push(piece);
+      continue;
+    }
+    const chunks = piece.text.split(/(\s+)/);
+    for (const chunk of chunks) {
+      if (!chunk) continue;
+      if (/^\s+$/.test(chunk)) flush();
+      else current.push({ text: chunk, kind: "plain" });
+    }
+  }
+  flush();
+  return words;
+}
+
+function speakableWord(text: string): string {
+  return text
+    .replace(/⁻¹/g, " to the minus one")
+    .replace(/²⁺/g, " two plus")
+    .replace(/⁺/g, " plus")
+    .replace(/⁻/g, " minus")
+    .replace(/₂/g, " two")
+    .replace(/→/g, " gives ")
+    .replace(/⇌/g, " in equilibrium with ")
+    .trim() || text;
+}
+
+/** Sci, plus a highlighted word: the box that follows the voice. */
+export function SciText({ text, style, highlight, accentSoft, accent }: {
+  text: string;
+  style?: TextStyle | TextStyle[];
+  highlight?: number;
+  accentSoft?: string;
+  accent?: string;
+}) {
+  const words = sciWords(text);
+  const base = Array.isArray(style) ? Object.assign({}, ...style) : style || {};
+  const small = Math.round((base.fontSize ?? 16) * 0.72);
+  return (
+    <Text style={style}>
+      {words.map((word, w) => {
+        const lit = w === highlight;
+        const wordStyle = lit
+          ? { backgroundColor: accentSoft, color: accent, fontWeight: "600" as const }
+          : undefined;
+        return (
+          <Text key={w} style={wordStyle}>
+            {word.pieces.map((piece, i) =>
+              piece.kind === "plain" ? (
+                <Text key={i}>{piece.text}</Text>
+              ) : (
+                <Text key={i} style={{ fontSize: small }}>{piece.text}</Text>
+              )
+            )}
+            {w < words.length - 1 ? " " : ""}
+          </Text>
+        );
+      })}
+    </Text>
+  );
+}
