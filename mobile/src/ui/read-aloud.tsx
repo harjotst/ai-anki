@@ -22,6 +22,10 @@ export type ReadAloudControl = {
   toggle: () => void;
   restart: () => void;
   seek: (word: number) => void;
+  /** Grabbing the scrubber: the voice pauses where it was. */
+  beginScrub: () => void;
+  /** Dragging it: the box rides the thumb, silently. */
+  preview: (word: number) => void;
   current: number | null;
   total: number;
   /** The highlight for one part of the page, in that part's own word
@@ -130,12 +134,24 @@ export function useReadAloud(parts: string[]): ReadAloudControl {
     }
   }, [state, speakFrom]);
 
+  const clamp = useCallback(
+    (word: number) => Math.max(0, Math.min(built.total - 1, word)),
+    [built.total]
+  );
+
   return {
     active: state !== "idle",
     state,
     toggle,
     restart: useCallback(() => speakFrom(0), [speakFrom]),
-    seek: useCallback((word: number) => speakFrom(Math.max(0, Math.min(built.total - 1, word))), [speakFrom, built.total]),
+    seek: useCallback((word: number) => speakFrom(clamp(word)), [speakFrom, clamp]),
+    beginScrub: useCallback(() => {
+      if (state === "playing") {
+        Speech.pause();
+        setState("paused");
+      }
+    }, [state]),
+    preview: useCallback((word: number) => setCurrent(clamp(word)), [clamp]),
     current,
     total: built.total,
     highlightFor: useCallback((part: number) => {
@@ -150,7 +166,6 @@ export function useReadAloud(parts: string[]): ReadAloudControl {
 /** The pinned control row: play/pause, the scrubber, from-the-top. */
 export function ReadAloudBar({ ctl }: { ctl: ReadAloudControl }) {
   const palette = usePalette();
-  const [scrub, setScrub] = useState<number | null>(null);
   return (
     <View style={{
       flexDirection: "row", alignItems: "center", gap: space[1],
@@ -169,13 +184,10 @@ export function ReadAloudBar({ ctl }: { ctl: ReadAloudControl }) {
         minimumValue={0}
         maximumValue={Math.max(0, ctl.total - 1)}
         step={1}
-        value={scrub ?? ctl.current ?? 0}
-        onSlidingStart={() => setScrub(ctl.current ?? 0)}
-        onValueChange={(v) => scrub !== null && setScrub(Math.round(v))}
-        onSlidingComplete={(v) => {
-          setScrub(null);
-          ctl.seek(Math.round(v));
-        }}
+        value={ctl.current ?? 0}
+        onSlidingStart={ctl.beginScrub}
+        onValueChange={(v) => ctl.preview(Math.round(v))}
+        onSlidingComplete={(v) => ctl.seek(Math.round(v))}
         minimumTrackTintColor={palette.accent}
         maximumTrackTintColor={palette.border}
         thumbTintColor={palette.accent}
