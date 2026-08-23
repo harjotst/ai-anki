@@ -65,10 +65,15 @@ export function useReadAloud(parts: string[]): ReadAloudControl {
   useEffect(() => {
     Speech.getAvailableVoicesAsync()
       .then((all) => {
+        // Premium beats enhanced beats compact. expo-speech reports premium
+        // voices as merely "Enhanced", but their identifiers say what they
+        // are: com.apple.voice.premium.en-US.Ava.
         const en = all.filter((v) => v.language?.startsWith("en"));
-        const best =
-          en.find((v) => String(v.quality).toLowerCase() === "enhanced") ?? en[0];
-        voice.current = best?.identifier;
+        const premium = en.find((v) => v.identifier?.includes(".premium."));
+        const enhanced = en.find(
+          (v) => String(v.quality).toLowerCase() === "enhanced"
+        );
+        voice.current = (premium ?? enhanced ?? en[0])?.identifier;
       })
       .catch(() => {});
   }, []);

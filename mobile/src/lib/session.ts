@@ -7,8 +7,18 @@ import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { configured, supabase } from "./supabase";
 
-export const BASE =
-  process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
+import Constants from "expo-constants";
+
+// Where the API lives. On the simulator, the Mac's loopback. On a real
+// phone loopback is the phone itself — so in development the API address
+// is derived from wherever Metro is serving from, which IS the Mac. An
+// explicit EXPO_PUBLIC_API_URL (a deployed API) beats both.
+function defaultBase(): string {
+  const host = Constants.expoConfig?.hostUri?.split(":")[0];
+  return host ? `http://${host}:8080` : "http://127.0.0.1:8080";
+}
+
+export const BASE = process.env.EXPO_PUBLIC_API_URL ?? defaultBase();
 
 const DEV_TOKEN_KEY = "ai_anki_dev_token";
 // Set on explicit sign-out. Without it the dev bypass boomerangs: sign out,

@@ -49,4 +49,6 @@ def dev_token():
 app.router.routes.insert(0, app.router.routes.pop())
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8080, log_level="warning")
+    # All interfaces, not loopback: a real phone on the same Wi-Fi reaches
+    # the API at the Mac's LAN address, which loopback would never answer.
+    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="warning")
