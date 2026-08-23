@@ -25,6 +25,7 @@ so rather than inventing an answer.
 
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import datetime, timedelta
 
@@ -48,6 +49,17 @@ DEFAULT_WINDOW_DAYS = 7
 KNOWN_THRESHOLD = 0.9
 
 PENDING, ACCEPTED = "pending", "accepted"
+
+
+USERNAME_RE = re.compile(r"^[a-z0-9_]{3,20}$")
+
+
+class BadUsername(Exception):
+    """Not a name this system will print on a leaderboard."""
+
+
+class UsernameTaken(Exception):
+    """Somebody got there first."""
 
 
 class NotFriendable(Exception):
@@ -81,6 +93,21 @@ def friend_code(conn: psycopg.Connection, account_id: str) -> str:
     raise NotFriendable("could not mint a code")
 
 
+def claim_username(conn: psycopg.Connection, account_id: str, username: str) -> str:
+    """Take a public handle. Lowercased, because @Harjot and @harjot being
+    different people is a phishing feature, not a personalisation one."""
+    handle = (username or "").strip().lower()
+    if not USERNAME_RE.match(handle):
+        raise BadUsername("3-20 characters: letters, numbers, underscore")
+    try:
+        conn.execute(
+            "UPDATE account SET username = %s WHERE id = %s", (handle, account_id)
+        )
+    except psycopg.errors.UniqueViolation as exc:
+        raise UsernameTaken("that username is taken") from exc
+    return handle
+
+
 def _pair(one: str, other: str) -> tuple[str, str]:
     """One row per friendship, not two.
 
@@ -91,13 +118,23 @@ def _pair(one: str, other: str) -> tuple[str, str]:
     return (one, other) if str(one) < str(other) else (other, one)
 
 
-def request(conn: psycopg.Connection, account_id: str, code: str) -> str:
-    """Ask to be somebody's friend, by the code they gave you."""
+def request(conn: psycopg.Connection, account_id: str, handle: str) -> str:
+    """Ask to be somebody's friend, by username or by the code they gave you.
+
+    Usernames are public handles — searchable by design, which is what makes
+    them different from emails, where the same lookup would tell anybody
+    whether an address has an account.
+    """
+    wanted = (handle or "").strip()
     row = conn.execute(
-        "SELECT id FROM account WHERE friend_code = %s", ((code or "").strip().upper(),)
+        "SELECT id FROM account WHERE lower(username) = %s", (wanted.lstrip("@").lower(),)
     ).fetchone()
     if row is None:
-        raise NotFriendable("no such code")
+        row = conn.execute(
+            "SELECT id FROM account WHERE friend_code = %s", (wanted.upper(),)
+        ).fetchone()
+    if row is None:
+        raise NotFriendable("nobody by that username or code")
 
     other = str(row["id"])
     if other == str(account_id):
@@ -136,7 +173,7 @@ def remove(conn: psycopg.Connection, account_id: str, other: str) -> bool:
 def listing(conn: psycopg.Connection, account_id: str) -> dict:
     rows = conn.execute(
         "SELECT f.account_low, f.account_high, f.state, f.requested_by,"
-        "       a.display_name, a.friend_code"
+        "       a.display_name, a.username, a.friend_code"
         "  FROM friendship f"
         "  JOIN account a ON a.id = CASE WHEN f.account_low = %s"
         "                                THEN f.account_high ELSE f.account_low END"
@@ -155,6 +192,7 @@ def listing(conn: psycopg.Connection, account_id: str) -> dict:
         entry = {
             "account_id": other,
             "display_name": row["display_name"],
+            "username": row["username"],
             "friend_code": row["friend_code"],
         }
         if row["state"] == ACCEPTED:
@@ -205,12 +243,13 @@ def leaderboard(
             (other, since, moment),
         ).fetchone()
         named = conn.execute(
-            "SELECT display_name FROM account WHERE id = %s", (other,)
+            "SELECT display_name, username FROM account WHERE id = %s", (other,)
         ).fetchone()
         rows.append(
             {
                 "account_id": other,
                 "display_name": named["display_name"] if named else None,
+                "username": named["username"] if named else None,
                 "is_you": other == str(account_id),
                 "reviews": counted["reviews"],
                 "days_studied": counted["days_studied"],

@@ -188,6 +188,8 @@ conn.execute(
     (MAYA, "maya@local.test", "Maya Chen", False, d(2026, 7, 20)))
 social.friend_code(conn, DEV)
 social.friend_code(conn, MAYA)
+social.claim_username(conn, DEV, "harjot")
+social.claim_username(conn, MAYA, "maya")
 
 for deck_id, name, created in DECKS:
     conn.execute("INSERT INTO deck (id, account_id, name, created_at) VALUES (%s,%s,%s,%s)"

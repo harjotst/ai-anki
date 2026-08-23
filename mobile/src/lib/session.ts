@@ -11,6 +11,10 @@ export const BASE =
   process.env.EXPO_PUBLIC_API_URL ?? "http://127.0.0.1:8080";
 
 const DEV_TOKEN_KEY = "ai_anki_dev_token";
+// Set on explicit sign-out. Without it the dev bypass boomerangs: sign out,
+// loadSession runs, a fresh dev token is fetched, and the person is "signed
+// in" again — which reads as a sign-out button that does nothing.
+const SIGNED_OUT_KEY = "ai_anki_signed_out";
 let devToken: string | null = null;
 
 export type SessionKind = "supabase" | "dev" | null;
@@ -42,28 +46,48 @@ if (supabase) {
 }
 
 async function fetchDevToken(): Promise<string | null> {
+  // In real mode the SPA catch-all answers this path with HTML and a 200 —
+  // which iOS then happily caches. So: only a JSON body with a token counts,
+  // and the timestamp defeats a cached copy of the wrong answer.
   try {
-    const response = await fetch(`${BASE}/dev/token`);
+    const response = await fetch(`${BASE}/dev/token?t=${Date.now()}`);
     if (!response.ok) return null;
-    const body = await response.json();
-    return body.token ?? null;
+    const body = await response.json().catch(() => null);
+    return body?.token ?? null;
   } catch {
     return null;
   }
 }
 
-/** Restore or establish a session. The provider wins over the bypass. */
+/** Restore or establish a session. The provider wins over the bypass, and
+ *  an explicit sign-out sticks — the bypass never signs anybody back in. */
 export async function loadSession(): Promise<SessionKind> {
   if (supabase) {
     const { data } = await supabase.auth.getSession();
     if (data.session) return (currentKind = "supabase");
   }
   devToken = await AsyncStorage.getItem(DEV_TOKEN_KEY);
-  if (!devToken) {
+  if (!devToken && !(await AsyncStorage.getItem(SIGNED_OUT_KEY))) {
     devToken = await fetchDevToken();
     if (devToken) await AsyncStorage.setItem(DEV_TOKEN_KEY, devToken);
   }
   return (currentKind = devToken ? "dev" : null);
+}
+
+/** Whether the dev server is there to offer local data — the sign-in screen
+ *  shows that path only when it exists. */
+export async function devAvailable(): Promise<boolean> {
+  return Boolean(await fetchDevToken());
+}
+
+/** The explicit choice to work on local development data. */
+export async function useDevData(): Promise<boolean> {
+  devToken = await fetchDevToken();
+  if (!devToken) return false;
+  await AsyncStorage.setItem(DEV_TOKEN_KEY, devToken);
+  await AsyncStorage.removeItem(SIGNED_OUT_KEY);
+  notify("dev");
+  return true;
 }
 
 export async function accessToken(): Promise<string | null> {
@@ -81,6 +105,7 @@ export async function signOut() {
   }
   devToken = null;
   await AsyncStorage.removeItem(DEV_TOKEN_KEY);
+  await AsyncStorage.setItem(SIGNED_OUT_KEY, "1");
   notify(null);
 }
 
@@ -94,6 +119,7 @@ function requireAuth() {
 export async function signInWithEmail(email: string, password: string) {
   const { error } = await requireAuth().auth.signInWithPassword({ email, password });
   if (error) throw new Error(error.message);
+  await AsyncStorage.removeItem(SIGNED_OUT_KEY);
 }
 
 /** Returns true when the account is ready, false when the provider sent a
@@ -163,6 +189,11 @@ async function call(path: string, options: RequestInit, retrying = false): Promi
       await AsyncStorage.setItem(DEV_TOKEN_KEY, fresh);
       return call(path, options, true);
     }
+    // The dev world is gone — the server no longer speaks dev tokens. Land
+    // on the sign-in screen rather than a tab full of errors.
+    devToken = null;
+    await AsyncStorage.removeItem(DEV_TOKEN_KEY);
+    notify(null);
   }
   return response;
 }

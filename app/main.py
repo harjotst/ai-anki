@@ -684,13 +684,40 @@ def create_app(
     ):
         with db.transaction(conn):
             code = social.friend_code(conn, account.id)
+        named = conn.execute(
+            "SELECT username FROM account WHERE id = %s", (account.id,)
+        ).fetchone()
         return {
             "account_id": account.id,
             "display_name": account.display_name,
+            "username": named["username"] if named else None,
             "email": account.email,
             "is_admin": account.is_admin,
             "friend_code": code,
         }
+
+    @app.patch("/api/me")
+    async def update_me(
+        body: dict,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        """Claim or change the public handle, and the display name."""
+        if "username" in body:
+            try:
+                with db.transaction(conn):
+                    social.claim_username(conn, account.id, str(body["username"] or ""))
+            except social.BadUsername as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            except social.UsernameTaken as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if "display_name" in body:
+            name = str(body["display_name"] or "").strip()[:60] or None
+            conn.execute(
+                "UPDATE account SET display_name = %s WHERE id = %s",
+                (name, account.id),
+            )
+        return await read_me(conn=conn, account=account)
 
     @app.get("/api/friends")
     async def read_friends(
@@ -704,14 +731,15 @@ def create_app(
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
     ):
-        """Ask by the code somebody gave you."""
+        """Ask by username, or by the code somebody gave you."""
+        handle = str(body.get("username") or body.get("handle") or body.get("code") or "")
         try:
             with db.transaction(conn):
-                other = social.request(conn, account.id, str(body.get("code", "")))
+                other = social.request(conn, account.id, handle)
         except social.NotFriendable as exc:
-            # "No such code" is a 404; "that code is yours" is a 422. The
+            # A failed lookup is a 404; "that code is yours" is a 422. The
             # difference is real: one is a typo, the other is a misunderstanding.
-            status = 404 if "no such code" in str(exc) else 422
+            status = 404 if "nobody by" in str(exc) else 422
             raise HTTPException(status_code=status, detail=str(exc)) from exc
         return {"account_id": other, "state": social.PENDING}
 
