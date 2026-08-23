@@ -2,6 +2,7 @@
 // the product's own loop: the terminal action is "Study these now", not a
 // download. The .apkg export lives on the deck screen, web-side.
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useGoBack } from "../../../lib/nav";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -17,6 +18,7 @@ const btnSmall = { paddingHorizontal: space[2] };
 export default function CardsReview() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const goBack = useGoBack();
   const toast = useToast();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
@@ -136,7 +138,7 @@ export default function CardsReview() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-        <IconBtn name="chevL" label="Back" onPress={() => router.back()} />
+        <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
         <Cap style={{ flex: 1, textAlign: "center" }}>Look them over</Cap>
         <View style={{ width: target.min }} />
       </View>

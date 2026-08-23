@@ -3,6 +3,7 @@
 // reopening resumes where the person left off.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { type Href, useLocalSearchParams, useRouter } from "expo-router";
+import { useGoBack } from "../../lib/nav";
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,6 +21,7 @@ const prose = { fontSize: 17, lineHeight: 27 };
 export default function Lessons() {
   const { jobId } = useLocalSearchParams<{ jobId: string }>();
   const router = useRouter();
+  const goBack = useGoBack();
   const toast = useToast();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
@@ -64,7 +66,7 @@ export default function Lessons() {
   useEffect(() => {
     if (!emptyDone) return;
     toast("Finish this on the web for now — job screens land on mobile next.");
-    router.back();
+    goBack();
   }, [emptyDone, toast, router]);
 
   const markRead = useCallback((topicId: string) => {
@@ -94,7 +96,7 @@ export default function Lessons() {
     return (
       <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top }}>
         <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-          <IconBtn name="chevL" label="Back" onPress={() => router.back()} />
+          <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
         </View>
         <View style={{ padding: space[3], paddingTop: 60, gap: space[2] }}>
           <T v="heading">The first lesson is being written</T>
@@ -118,7 +120,7 @@ export default function Lessons() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top, paddingBottom: insets.bottom + space[2] }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-        <IconBtn name="chevL" label="Back" onPress={() => router.back()} />
+        <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
         <View style={{ flex: 1, alignItems: "center" }}>
           <Pressable onPress={() => setSheet(true)}
             style={({ pressed }) => ({

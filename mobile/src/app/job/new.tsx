@@ -3,6 +3,7 @@
 // names, same copy — with the file input swapped for the system picker.
 import * as DocumentPicker from "expo-document-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useGoBack } from "../../lib/nav";
 import React, { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -13,6 +14,7 @@ import { Button, Cap, ErrorCard, Icon, IconBtn, Sheet, T } from "../../ui";
 
 export default function NewJob() {
   const router = useRouter();
+  const goBack = useGoBack();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
   const { deck } = useLocalSearchParams<{ deck?: string }>();
@@ -111,7 +113,7 @@ export default function NewJob() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-        <IconBtn name="chevL" label="Back" onPress={() => router.back()} />
+        <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
         <Cap style={{ flex: 1, textAlign: "center" }}>Add a lecture</Cap>
         <View style={{ width: target.min }} />
       </View>

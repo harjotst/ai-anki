@@ -1,6 +1,7 @@
 // Topic-by-topic comparison on a shared deck — one friend at a time, with the
 // grinder's actual question answered by the gap sort: where are they ahead?
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useGoBack } from "../../lib/nav";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,6 +13,7 @@ import { Button, Cap, CardBox, ErrorCard, IconBtn, Pill, Seg, Skeleton, T } from
 export default function Compare() {
   const { deckId } = useLocalSearchParams<{ deckId: string }>();
   const router = useRouter();
+  const goBack = useGoBack();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
 
@@ -73,7 +75,7 @@ export default function Compare() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-        <IconBtn name="chevL" label="Back" onPress={() => router.back()} />
+        <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
         <Cap style={{ flex: 1, textAlign: "center" }}>{deckName}</Cap>
         {/* Spacer keeps the title centered with no right action. */}
         <View style={{ width: target.min }} />

@@ -2,6 +2,7 @@
 // web's DeckLesson. The lesson lives on whichever job built this deck, so
 // the deck's jobs are tried in order until one can teach the topic.
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useGoBack } from "../../../../lib/nav";
 import React, { useCallback, useEffect, useState } from "react";
 import { ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,6 +17,7 @@ const prose = { fontSize: 17, lineHeight: 27 };
 export default function DeckLesson() {
   const { id, topicId } = useLocalSearchParams<{ id: string; topicId: string }>();
   const router = useRouter();
+  const goBack = useGoBack();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
 
@@ -57,7 +59,7 @@ export default function DeckLesson() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-        <IconBtn name="chevL" label="Back" onPress={() => router.back()} />
+        <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
         <Cap style={{ flex: 1, textAlign: "center" }}>{lesson.deck_path.split("::").pop()}</Cap>
         <View style={{ width: target.min }} />
       </View>

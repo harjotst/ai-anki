@@ -2,6 +2,7 @@
 // broken branches (interrupted, failed) that used to dead-end. The phone
 // has no EventSource, so this polls the job the way the web's fallback does.
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useGoBack } from "../../../lib/nav";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -14,6 +15,7 @@ export default function JobRun() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const jobId = String(id);
   const router = useRouter();
+  const goBack = useGoBack();
   const [job, setJob] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const planFired = useRef(false);
@@ -114,12 +116,13 @@ function Frame({ title, caption, footer, children }: {
   title: string; caption?: string; footer?: React.ReactNode; children: React.ReactNode;
 }) {
   const router = useRouter();
+  const goBack = useGoBack();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-        <IconBtn name="chevL" label="Back" onPress={() => router.back()} />
+        <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
         <View style={{ flex: 1, alignItems: "center" }}>
           <Cap style={{ textAlign: "center" }}>{title}</Cap>
           {caption ? <Cap color={palette.muted} style={{ textAlign: "center" }}>{caption}</Cap> : null}

@@ -3,6 +3,7 @@
 // instantly; the queue flushes in idempotent batches behind the person's
 // back, and the only trace of the network is the quiet sync pill.
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useGoBack } from "../../lib/nav";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -19,6 +20,7 @@ const RATING_META: [string, string][] = [
 export default function Study() {
   const { deckId } = useLocalSearchParams<{ deckId: string }>();
   const router = useRouter();
+  const goBack = useGoBack();
   const toast = useToast();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
@@ -141,7 +143,7 @@ export default function Study() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top, paddingBottom: insets.bottom + space[2] }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-        <IconBtn name="x" label="Stop for now" onPress={() => router.back()} />
+        <IconBtn name="x" label="Stop for now" onPress={() => goBack()} />
         <Cap style={{ flex: 1, textAlign: "center" }}>{deckName.current}</Cap>
         <IconBtn name="dots" label="More" onPress={() => setMenu("overflow")} />
       </View>
@@ -291,6 +293,7 @@ export function EditSheet({ card, onClose, onSaved }: { card: any; onClose: () =
 
 function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; baselineKnown: number | null }) {
   const router = useRouter();
+  const goBack = useGoBack();
   const toast = useToast();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
@@ -390,9 +393,9 @@ function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; 
           <Button title={`Next: ${nextDeck.name} — ${nextDeck.due} due`}
             onPress={() => router.replace(`/study/${nextDeck.deck_id}`)} />
         ) : (
-          <Button title="Done" onPress={() => router.back()} />
+          <Button title="Done" onPress={() => goBack()} />
         )}
-        <Button title="Back to Today" kind="ghost" onPress={() => router.back()} />
+        <Button title="Back to Today" kind="ghost" onPress={() => goBack()} />
       </View>
 
       {editing && (

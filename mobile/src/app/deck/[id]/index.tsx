@@ -4,6 +4,7 @@
 // stand-in for the web's browser download.
 import * as FileSystem from "expo-file-system/legacy";
 import { type Href, useLocalSearchParams, useRouter } from "expo-router";
+import { useGoBack } from "../../../lib/nav";
 import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, TextInput, View, ViewStyle } from "react-native";
@@ -17,6 +18,7 @@ import { EditSheet } from "../../study/[deckId]";
 export default function DeckDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const goBack = useGoBack();
   const toast = useToast();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
@@ -131,7 +133,7 @@ export default function DeckDetail() {
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-        <IconBtn name="chevL" label="Back" onPress={() => router.back()} />
+        <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
         <Cap style={{ flex: 1, textAlign: "center" }}>{deck.name}</Cap>
         {deck.shared_with_me ? (
           <View style={{ width: target.min }} />
