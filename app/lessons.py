@@ -195,6 +195,7 @@ def build_lesson_request(documents: list[dict], topic: dict, provider) -> dict:
         "Cover only this topic. Other topics in this deck are being taught "
         "separately, and teaching the same point twice reaches the reader as a "
         "contradiction rather than as repetition."
+        '\n\nScientific notation is notation: write it as inline math markup — $V_{max}$, $k_{cat}$, $K_m$, $Ca^{2+}$, $t_{1/2}$, $10^{-9}$ M — dollar-delimited with LaTeX-style _{} and ^{} and nothing more (no other LaTeX commands beyond Greek letters like \\alpha and arrows like \\rightarrow). Plain-text spellings such as Vmax or Ca2+ are wrong.'
         + (
             "\n\nThis topic owns these points and only these:\n"
             + "\n".join(f"- {claim}" for claim in claims)

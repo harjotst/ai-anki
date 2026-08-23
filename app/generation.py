@@ -134,7 +134,11 @@ def build_cards_request(
         f"{topic['note_type']} note type where it fits the content.\n\n"
         "Cover only this topic. Do not generate cards for material that belongs "
         "to a different topic in the deck.\n\n"
-        "Every cloze card's front must contain at least one {{c1::...}} marker."
+        "Every cloze card's front must contain at least one {{c1::...}} marker.\n\n"
+        "Scientific notation is notation: write it as inline math markup — "
+        "$V_{max}$, $k_{cat}$, $K_m$, $Ca^{2+}$, $t_{1/2}$ — dollar-delimited "
+        "with LaTeX-style _{} and ^{} and nothing more. Plain-text spellings "
+        "such as Vmax or Ca2+ are wrong."
         + (
             "\n\nThis topic owns these points and only these:\n"
             + "\n".join(f"- {claim}" for claim in topic.get("claims") or [])

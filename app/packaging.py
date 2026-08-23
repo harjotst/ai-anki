@@ -32,6 +32,20 @@ def has_cloze_marker(text: str) -> bool:
     return CLOZE_MARKER.search(text) is not None
 
 
+def anki_math(text: str) -> str:
+    r"""Our inline $...$ markup, in the delimiters Anki's MathJax reads.
+
+    Anki renders \( ... \) natively; a raw dollar sign is just a dollar
+    sign there. Converted at this boundary only — the app's own renderer
+    reads the $ form, and the ledger stores what the model wrote.
+    """
+    # Only spans that contain math structure. "costs $5, then $6 more" has
+    # two dollar signs and no formula, and must come out untouched.
+    return re.sub(
+        r"\$([^$]*[_^\\][^$]*)\$", lambda m: r"\(" + m.group(1) + r"\)", text
+    )
+
+
 def effective_note_type(note_type: str, front: str) -> str:
     """Downgrade a cloze card that would produce no cards at all."""
     if note_type == "cloze" and not has_cloze_marker(front):
@@ -69,10 +83,11 @@ def build_package(cards, deck_name: str, timestamp: float | None = None) -> byte
         if deck is None:
             deck = decks[path] = genanki.Deck(deck_id_for(path), path)
 
+        front, back = anki_math(card.front), anki_math(card.back)
         if effective_note_type(card.note_type, card.front) == "cloze":
-            model, fields = CLOZE_MODEL, [card.front, card.back]
+            model, fields = CLOZE_MODEL, [front, back]
         else:
-            model, fields = BASIC_MODEL, [card.front, card.back]
+            model, fields = BASIC_MODEL, [front, back]
 
         # The stable uuid becomes the note GUID. Without it genanki hashes the
         # field content, so any edit would look like a brand-new note.

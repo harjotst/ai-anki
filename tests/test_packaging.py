@@ -80,3 +80,16 @@ def test_deck_ids_are_stable_across_builds_for_the_same_path():
         "Biology::Metabolism"
     )
     assert packaging.deck_id_for("Biology::Metabolism") != packaging.deck_id_for("Biology::Cells")
+
+
+def test_math_markup_reaches_anki_in_its_own_delimiters():
+    """We write $K_m$; Anki's MathJax reads \\(K_m\\). A raw dollar sign in
+    an exported card is just a dollar sign, which is the bug this guards."""
+    from app.packaging import anki_math
+
+    assert anki_math("Rate is $V_{max}$ over $K_m$.") == r"Rate is \(V_{max}\) over \(K_m\)."
+    # Dollar signs that are money, not markup: a span with no math structure
+    # (_ ^ \) is left exactly as written.
+    assert anki_math("costs $5, then $6 more") == "costs $5, then $6 more"
+    # No markup, no change — and cloze markers survive untouched.
+    assert anki_math("Vmax is {{c1::the ceiling}}") == "Vmax is {{c1::the ceiling}}"

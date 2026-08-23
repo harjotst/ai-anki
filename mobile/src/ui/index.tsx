@@ -10,6 +10,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Circle, Path, Rect } from "react-native-svg";
 import { font, radius, space, target, usePalette } from "../theme";
+import { Sci } from "./sci";
 
 // --- icons -----------------------------------------------------------------
 
@@ -82,6 +83,13 @@ const PATHS: Record<string, React.ReactNode> = {
     </>
   ),
   undo: <Path d="M8 5L3.5 9.5 8 14M4 9.5h10a6 6 0 0 1 0 12h-3" />,
+  sound: (
+    <>
+      <Path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z" />
+      <Path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11" />
+    </>
+  ),
+  pause: <Path d="M9 5.5v13M15 5.5v13" />,
   info: (
     <>
       <Circle cx="12" cy="12" r="9" />
