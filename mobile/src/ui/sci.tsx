@@ -222,8 +222,10 @@ export function SciText({ text, style, highlight, accentSoft, accent }: {
     <Text style={style}>
       {words.map((word, w) => {
         const lit = w === highlight;
+        // Background and color only: a bold highlight changes glyph widths
+        // and ripples the whole paragraph every time the voice moves.
         const wordStyle = lit
-          ? { backgroundColor: accentSoft, color: accent, fontWeight: "600" as const }
+          ? { backgroundColor: accentSoft, color: accent }
           : undefined;
         return (
           <Text key={w} style={wordStyle}>
