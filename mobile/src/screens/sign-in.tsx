@@ -13,7 +13,16 @@ export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   const palette = usePalette();
   const [dev, setDev] = useState(false);
   React.useEffect(() => {
-    devAvailable().then(setDev);
+    // Keep looking: the dev server comes and goes during development, and a
+    // one-time check strands the screen a tap short of signing in.
+    let alive = true;
+    const check = () => devAvailable().then((ok) => alive && setDev(ok));
+    check();
+    const timer = setInterval(check, 3000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
   }, []);
   const [mode, setMode] = useState<"in" | "up">("in");
   const [email, setEmail] = useState("");
