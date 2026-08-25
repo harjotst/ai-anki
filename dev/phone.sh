@@ -27,6 +27,14 @@ if [ "$free_gb" -lt 10 ]; then
 fi
 say "Disk: ${free_gb}GB free."
 
+# 1b. The Claude desktop app's simulator helper. On this machine the panel
+#     is rollout-disabled AND the helper it spawns shuts booted simulators
+#     down within minutes. It has no business running; end it on sight.
+if pgrep -f claude-ios-sim >/dev/null 2>&1; then
+  bad "Claude's simulator helper is running — it kills booted simulators. Stopping it."
+  kill $(pgrep -f claude-ios-sim) 2>/dev/null || true
+fi
+
 # 2. The API. (Real mode talks to hosted Postgres; pgdev is only for the
 #    dev harness and tests, so it is not started here.)
 status=$(curl -s -o /dev/null -w "%{http_code}" "$API/api/decks" || echo 000)
