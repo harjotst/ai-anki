@@ -87,8 +87,11 @@ LESSON_SCHEMA = {
         },
         "sections": {
             "type": "array",
-            "minItems": 2,
-            "maxItems": 4,
+            # No minItems above 1 and no maxItems at all: the structured-output
+            # API rejects both keywords outright, failing the request before it
+            # runs. Counts are constraints for the MODEL, so they live in the
+            # description, where the model actually reads them.
+            "minItems": 1,
             "description": (
                 "The concepts, in the order they have to be learned. Each one may "
                 "assume only what came before it. Two to four, never more: a "
@@ -138,8 +141,8 @@ LESSON_SCHEMA = {
         },
         "misconceptions": {
             "type": "array",
-            "maxItems": 2,
             "description": (
+                "At most two. "
                 "What people actually get wrong here. This is the part a textbook "
                 "does badly and the part worth the most: a belief named and "
                 "corrected is a card that will not be failed for six weeks."
@@ -160,10 +163,9 @@ LESSON_SCHEMA = {
         "check_yourself": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 2,
             "items": {"type": "string"},
             "description": (
-                "Questions to answer before moving to the cards. They test "
+                "One or two questions — never more — to answer before moving to the cards. They test "
                 "understanding rather than recall, which the cards will cover."
             ),
         },
