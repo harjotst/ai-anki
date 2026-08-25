@@ -55,10 +55,13 @@ export async function enqueue(review: QueuedReview) {
 }
 
 /** Undo support: remove a review that has not been flushed yet. Returns
- *  whether it was still here — if not, it already reached the server and
- *  the undo becomes a superseding review instead of a retraction. */
+ *  whether it was still here — if not, it already reached (or is on its
+ *  way to) the server, and the undo becomes a superseding review instead
+ *  of a retraction. In-flight counts as sent: the POST may already have
+ *  landed, and claiming a clean retraction for it loses the re-rating. */
 export async function removeQueued(clientUuid: string) {
   await ensureLoaded();
+  if (inFlight.has(clientUuid)) return false;
   const kept = rows.filter((row) => row.client_uuid !== clientUuid);
   if (kept.length === rows.length) return false;
   rows = kept;
@@ -68,31 +71,55 @@ export async function removeQueued(clientUuid: string) {
 }
 
 let flushing = false;
+let inFlight = new Set<string>();
 
-export async function flush() {
+async function dropByIdentity(uuids: Iterable<string>) {
+  // By identity, never by count: rows can be added or undone during the
+  // flight, and slicing a changed array from the head drops the wrong ones.
+  const gone = new Set(uuids);
+  rows = rows.filter((row) => !gone.has(row.client_uuid));
+  await persist();
+}
+
+export async function flush(): Promise<void> {
   if (flushing) return;
   await ensureLoaded();
   const batch = rows.slice();
   if (!batch.length) return;
   flushing = true;
+  inFlight = new Set(batch.map((row) => row.client_uuid));
   try {
-    await api("/api/reviews", {
+    const reply = await api("/api/reviews", {
       method: "POST",
       body: JSON.stringify({ reviews: batch }),
     });
-    // Only drop what was sent; anything enqueued during the flight stays.
-    rows = rows.slice(batch.length);
-    await persist();
-  } catch {
-    // Still queued; the next trigger retries. The sync pill in the study
-    // screen is the honest surface for this state.
+    await dropByIdentity(inFlight);
+    // The server names reviews it skipped (card gone — deck unshared,
+    // card rejected). They are gone from the queue with the rest: retrying
+    // them would jam everything behind rows that can never land.
+    void reply;
+  } catch (problem: any) {
+    if (problem?.status >= 400 && problem.status < 500) {
+      // A 4xx will fail identically forever. Dropping the batch loses
+      // these reviews; keeping it loses every review after them, forever.
+      await dropByIdentity(inFlight);
+    }
+    // Anything else (network, 5xx) stays queued; the next trigger retries,
+    // and the sync pill is the honest surface for that state.
   } finally {
     flushing = false;
+    inFlight = new Set();
     notify();
+    // Anything enqueued during the flight goes now, not at some future
+    // trigger that may never come.
+    if (rows.length) void flush();
   }
 }
 
-// Returning to the app is the phone's "reconnected": retry then.
+// Returning to the app is the phone's "reconnected": retry then. And a
+// cold start IS a return — reviews persisted by a killed app must not
+// wait for a state change that already happened.
 AppState.addEventListener("change", (state) => {
   if (state === "active") void flush();
 });
+void flush();

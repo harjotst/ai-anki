@@ -134,6 +134,21 @@ def test_the_api_is_never_shadowed_by_the_frontend_catch_all(client):
     assert response.headers["content-type"].startswith("application/json")
 
 
+@pytest.mark.parametrize("escape", ["/%2e%2e/%2e%2e/pyproject.toml", "/..%2f..%2fpyproject.toml"])
+def test_the_catch_all_cannot_be_walked_out_of_the_build_directory(client, escape):
+    """The guard only covers /api/, so this route is the whole front door.
+
+    Percent-encoded, because the plain `/../../` form is normalised away by the
+    client before it ever reaches the server -- a test written that way passes
+    against the vulnerable code and proves nothing. Decoded here, `..` reached
+    the repository root, and `.env` with it.
+    """
+    response = client.get(escape)
+
+    assert 'id="root"' in response.text, "the shell, not a file from outside dist"
+    assert "[project]" not in response.text
+
+
 def test_the_provider_choice_is_documented_with_its_gate_and_its_assumptions():
     docs = (ROOT / "docs" / "providers.md").read_text()
 

@@ -188,6 +188,19 @@ def record_topic_event(conn: psycopg.Connection, job_id: str, topic_id: str) -> 
     )
 
 
+def deck_name_from(filename: str) -> str:
+    """A human name for a deck, from the file that started it.
+
+    `safe_filename` is for the disk; its underscores and extension are
+    storage armour, not a title. People saw decks called
+    Introduction_to_the_Microbial_World_-_Honsa__PowerPoint_.pdf — the
+    filename cleaned up is the best default we have, and it is renameable.
+    """
+    stem = Path(filename).stem
+    name = re.sub(r"[_\s]+", " ", stem).strip(" .")
+    return name or "New deck"
+
+
 def create_job(
     conn: psycopg.Connection,
     data_dir: Path,
@@ -211,7 +224,9 @@ def create_job(
         # A Job always runs against a Deck. Without one named, it starts a new
         # lineage; naming one continues the deck the user is already building.
         if deck_id is None:
-            deck_id = ledger.create_deck(conn, name=safe_filename(filename), account_id=account_id)
+            deck_id = ledger.create_deck(
+                conn, name=deck_name_from(filename), account_id=account_id
+            )
         conn.execute(
             "INSERT INTO job (id, account_id, deck_id, state) VALUES (%s, %s, %s, %s)",
             (job_id, account_id, deck_id, UPLOADED),
@@ -447,14 +462,30 @@ def replace_plan(conn: psycopg.Connection, job_id: str, plan: dict) -> None:
         record_event(conn, job_id, "plan", {"topics": len(plan["topics"])})
 
 
-def update_card(conn: psycopg.Connection, card_uuid: str, front: str, back: str) -> bool:
-    updated = conn.execute(
-        # Correcting a card is the strongest evidence there is that somebody
-        # read it, so it counts as reviewed without a second click.
-        "UPDATE card SET front = %s, back = %s, question_fingerprint = %s,"
-        " reviewed_at = COALESCE(reviewed_at, %s) WHERE card_uuid = %s",
-        (front, back, ledger.fingerprint(front), db.now(), card_uuid),
-    )
+def update_card(
+    conn: psycopg.Connection,
+    card_uuid: str,
+    front: str,
+    back: str,
+    *,
+    reset_review: bool = False,
+) -> bool:
+    if reset_review:
+        # A re-roll replaced the text wholesale; whatever was reviewed is
+        # gone, so the review mark goes with it.
+        updated = conn.execute(
+            "UPDATE card SET front = %s, back = %s, question_fingerprint = %s,"
+            " reviewed_at = NULL WHERE card_uuid = %s",
+            (front, back, ledger.fingerprint(front), card_uuid),
+        )
+    else:
+        updated = conn.execute(
+            # Correcting a card is the strongest evidence there is that somebody
+            # read it, so it counts as reviewed without a second click.
+            "UPDATE card SET front = %s, back = %s, question_fingerprint = %s,"
+            " reviewed_at = COALESCE(reviewed_at, %s) WHERE card_uuid = %s",
+            (front, back, ledger.fingerprint(front), db.now(), card_uuid),
+        )
     return updated.rowcount > 0
 
 

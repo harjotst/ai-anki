@@ -235,10 +235,14 @@ def create_app(
         job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         job = owned_job(conn, job_id, account.id)
+        named = conn.execute(
+            "SELECT name FROM deck WHERE id = %s", (job.deck_id,)
+        ).fetchone()
         return {
             "job_id": job.id,
             "account_id": job.account_id,
             "deck_id": job.deck_id,
+            "deck_name": named["name"] if named else None,
             "state": job.state,
             "error": job.error,
             "plan": job.plan,
@@ -312,6 +316,37 @@ def create_app(
 
         jobs.save_plan(conn, job_id, plan)
         return {"job_id": job_id, "plan": plan}
+
+    @app.get("/api/decks/{deck_id}/jobs")
+    async def deck_jobs(
+        deck_id: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        """The complete jobs behind a deck, for owner and members alike.
+
+        A shared deck's lessons live under its jobs, and /api/jobs lists only
+        the caller's own — so recipients could see the cards but never reach
+        the teaching. Complete jobs only: a member reads what was made, the
+        making stays the author's business.
+        """
+        owned_deck(conn, deck_id, account.id)
+        rows = conn.execute(
+            "SELECT id, state, created_at FROM job"
+            " WHERE deck_id = %s AND state IN ('complete', 'reviewing')"
+            " ORDER BY created_at DESC",
+            (deck_id,),
+        ).fetchall()
+        return {
+            "jobs": [
+                {
+                    "job_id": row["id"],
+                    "state": row["state"],
+                    "created_at": row["created_at"].isoformat(),
+                }
+                for row in rows
+            ]
+        }
 
     @app.get("/api/decks/{deck_id}/ledger")
     async def read_ledger(
@@ -434,14 +469,39 @@ def create_app(
         jobs.replace_plan(conn, job_id, plan)
         return {"job_id": job_id, "plan": plan}
 
+    def owned_card(conn, card_uuid: str, account_id: str) -> dict:
+        """A card, but only for the person whose job wrote it.
+
+        Shared-deck members study these cards; they do not rewrite or delete
+        them under the owner. Missing and forbidden answer identically, for
+        the same reason owned_job's do.
+        """
+        existing = jobs.find_card(conn, card_uuid)
+        if existing is not None:
+            job = jobs.load_job(conn, existing["job_id"])
+            if job is not None and str(job.account_id) == str(account_id):
+                return existing
+        raise HTTPException(status_code=404, detail="no such card")
+
     @app.patch("/api/cards/{card_uuid}")
-    async def edit_card(card_uuid: str, body: dict, conn=Depends(get_conn)):
+    async def edit_card(
+        card_uuid: str,
+        body: dict,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        owned_card(conn, card_uuid, account.id)
         if not jobs.update_card(conn, card_uuid, body.get("front", ""), body.get("back", "")):
             raise HTTPException(status_code=404, detail="no such card")
         return {"card_uuid": card_uuid}
 
     @app.delete("/api/cards/{card_uuid}")
-    async def reject_card(card_uuid: str, conn=Depends(get_conn)):
+    async def reject_card(
+        card_uuid: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        owned_card(conn, card_uuid, account.id)
         if not jobs.delete_card(conn, card_uuid):
             raise HTTPException(status_code=404, detail="no such card")
         return {"card_uuid": card_uuid, "rejected": True}
@@ -454,13 +514,14 @@ def create_app(
         return {"rejected": jobs.delete_topic_cards(conn, job_id, topic_id)}
 
     @app.post("/api/cards/{card_uuid}/reroll")
-    async def reroll_card(card_uuid: str, conn=Depends(get_conn)):
+    async def reroll_card(
+        card_uuid: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
         """Ask again for one card, not the whole topic."""
-        existing = jobs.find_card(conn, card_uuid)
-        if existing is None:
-            raise HTTPException(status_code=404, detail="no such card")
-        job = jobs.load_job(conn, existing["job_id"])
-        guard_spend(conn, job.account_id if job else None)
+        existing = owned_card(conn, card_uuid, account.id)
+        guard_spend(conn, account.id)
 
         topic = jobs.topic_of(conn, existing["job_id"], existing["topic_id"])
         documents = jobs.documents_for(conn, existing["job_id"], provider)
@@ -479,11 +540,14 @@ def create_app(
             topic_id=existing["topic_id"], model=provider.model,
         )
         replacement = (reply.data.get("cards") or [{}])[0]
+        # Fresh text needs fresh eyes: a re-rolled card goes back to unreviewed
+        # instead of being silently marked kept by the edit.
         jobs.update_card(
             conn,
             card_uuid,
             replacement.get("front", existing["front"]),
             replacement.get("back", existing["back"]),
+            reset_review=True,
         )
         return {"card_uuid": card_uuid}
 
@@ -656,15 +720,22 @@ def create_app(
         prefix it has to work out the length of.
         """
         reviews = list(body.get("reviews") or [])
-        for review in reviews:
-            if not study.studiable(conn, account.id, review.get("card_uuid")):
-                raise HTTPException(status_code=404, detail="no such card to review")
+        # A review whose card is gone — deck unshared, card rejected — is
+        # skipped and named, never a reason to fail the batch: one dead row
+        # would otherwise jam a client's queue behind it forever, which is
+        # the opposite of "safe to retry".
+        skipped = [
+            review.get("client_uuid")
+            for review in reviews
+            if not study.studiable(conn, account.id, review.get("card_uuid"))
+        ]
+        reviews = [r for r in reviews if r.get("client_uuid") not in set(skipped)]
         try:
             with db.transaction(conn):
                 accepted = study.record(conn, account.id, reviews)
         except study.UnknownRating as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {"accepted": accepted, "submitted": len(reviews)}
+        return {"accepted": accepted, "submitted": len(reviews), "skipped": skipped}
 
     @app.get("/api/cards/{card_uuid}/reviews")
     async def read_card_history(
@@ -1012,8 +1083,11 @@ def create_app(
 
         @app.get("/{path:path}", include_in_schema=False)
         async def serve_frontend(path: str):
-            candidate = frontend / path
-            if path and candidate.is_file():
+            # Resolved and contained: `path` arrives percent-decoded, so a
+            # `%2e%2e` escapes the build directory and this route -- which sits
+            # outside the guard -- would hand out any file the process can read.
+            candidate = (frontend / path).resolve()
+            if path and candidate.is_file() and candidate.is_relative_to(frontend):
                 return FileResponse(candidate)
             # Any other path is a client-side route, so the shell is returned and
             # the app works out what to show — including a job link opened cold.

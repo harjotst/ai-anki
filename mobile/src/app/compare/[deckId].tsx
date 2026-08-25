@@ -50,7 +50,13 @@ export default function Compare() {
       you: Math.round(topic.mastery * 100),
       them: Math.round(((theirs[topic.deck_path] as number) || 0) * 100),
     }));
-    if (sort === "gap") built.sort((a: any, b: any) => (a.you - a.them) - (b.you - b.them));
+    if (sort === "gap")
+      built.sort((a: any, b: any) => {
+        // Behind first (that is the studying signal), then your leads,
+        // and dead ties last — a list led by 0–0 rows answers nothing.
+        const rank = (t: any) => (t.them > t.you ? 0 : t.you > t.them ? 1 : 2);
+        return rank(a) - rank(b) || Math.abs(b.you - b.them) - Math.abs(a.you - a.them);
+      });
     return built;
   }, [compared, other, sort]);
 

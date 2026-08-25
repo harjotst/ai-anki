@@ -26,6 +26,11 @@ export default function CardsReview() {
   const [cards, setCards] = useState<any[] | null>(null);
   const [job, setJob] = useState<any>(null);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  // Pending and confirmed rejects. The fetched list is never filtered in
+  // place: these uuids are subtracted at render time, so a refetch during
+  // the undo window cannot resurrect an optimistically-rejected card, and a
+  // confirmed DELETE needs no reload to stay gone.
+  const [rejected, setRejected] = useState<Set<string>>(() => new Set());
   const [editing, setEditing] = useState<any>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,11 +65,12 @@ export default function CardsReview() {
     </View>
   );
 
-  const byTopic = cards.reduce((groups: Record<string, any[]>, card: any) => {
+  const visible = cards.filter((card) => !rejected.has(card.card_uuid));
+  const byTopic = visible.reduce((groups: Record<string, any[]>, card: any) => {
     (groups[card.deck_path] ||= []).push(card);
     return groups;
   }, {});
-  const keptCount = cards.filter((card) => card.reviewed).length;
+  const keptCount = visible.filter((card) => card.reviewed).length;
 
   const act = async (label: string, run: () => Promise<void>) => {
     setBusy(label);
@@ -91,14 +97,25 @@ export default function CardsReview() {
   const reject = (uuids: string[]) => {
     // Optimistic removal with a 5-second undo; the server hears only if the
     // window passes. Deletion is confirmed by the snackbar, never celebrated.
-    setCards((current) => current && current.filter((card) => !uuids.includes(card.card_uuid)));
+    setRejected((current) => new Set([...current, ...uuids]));
     setPicked(new Set());
+    const restore = () =>
+      setRejected((current) => {
+        const next = new Set(current);
+        uuids.forEach((uuid) => next.delete(uuid));
+        return next;
+      });
     const timer = setTimeout(() => {
       uuids.forEach((uuid) => doomed.current.delete(uuid));
       api(`/api/jobs/${id}/cards/reject`, {
         method: "POST",
         body: JSON.stringify({ card_uuids: uuids }),
-      }).catch(() => load());
+      }).catch(() => {
+        // The server never heard it — put the cards back and resync.
+        restore();
+        load();
+      });
+      // On success the uuids stay in the set: excluded for good.
     }, 5000);
     uuids.forEach((uuid) => doomed.current.set(uuid, timer));
     toast(`${uuids.length} card${uuids.length > 1 ? "s" : ""} rejected`, {
@@ -107,7 +124,7 @@ export default function CardsReview() {
       onAction: () => {
         clearTimeout(timer);
         uuids.forEach((uuid) => doomed.current.delete(uuid));
-        load();
+        restore();
       },
     });
   };
@@ -157,11 +174,11 @@ export default function CardsReview() {
           <View style={{ height: 4, borderRadius: 2, backgroundColor: palette.sunken, overflow: "hidden" }}>
             <View style={{
               height: 4, borderRadius: 2, backgroundColor: palette.accent,
-              width: `${cards.length ? (keptCount / cards.length) * 100 : 0}%`,
+              width: `${visible.length ? (keptCount / visible.length) * 100 : 0}%`,
             }} />
           </View>
           <Cap style={{ marginTop: 6, fontVariant: ["tabular-nums"] }}>
-            {keptCount} of {cards.length} kept
+            {keptCount} of {visible.length} kept
           </Cap>
         </View>
 
@@ -235,9 +252,9 @@ export default function CardsReview() {
           </View>
         ))}
 
-        {cards.length > 0 && job && (
+        {visible.length > 0 && job && (
           <CardBox style={{ gap: space[1] }}>
-            <T v="heading">{cards.length} cards ready</T>
+            <T v="heading">{visible.length} cards ready</T>
             <Button title="Study these now" onPress={studyNow} disabled={busy === "study"} />
             <Button title="Later" kind="ghost" onPress={() => router.push(`/deck/${job.deck_id}`)} />
           </CardBox>

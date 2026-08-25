@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cached, dropCache, dueCounts } from "../../lib/data";
-import { enqueue, pendingCount, removeQueued, subscribe, uuid } from "../../lib/queue";
+import { enqueue, flush, pendingCount, removeQueued, subscribe, uuid } from "../../lib/queue";
 import { api } from "../../lib/session";
 import { radius, space, target, usePalette } from "../../theme";
 import { Button, Cap, CardBox, CardText, ErrorCard, Icon, IconBtn, Pill, Sheet, Skeleton, T, useToast } from "../../ui";
@@ -303,19 +303,24 @@ function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; 
   const [editing, setEditing] = useState<any>(null);
 
   useEffect(() => {
-    dropCache("/api");
-    api("/api/leaderboard").then(setBoard).catch(() => {});
-    api("/api/decks")
-      .then(async ({ decks }: any) => {
-        const counts = await dueCounts(decks);
-        const candidates = decks
-          .filter((deck: any) => deck.deck_id !== deckId && (counts[deck.deck_id] || 0) > 0)
-          .sort((a: any, b: any) => counts[b.deck_id]! - counts[a.deck_id]!);
-        if (candidates.length) {
-          setNextDeck({ ...candidates[0], due: counts[candidates[0].deck_id] });
-        }
-      })
-      .catch(() => {});
+    (async () => {
+      // The final ratings may still be sitting in the local queue; land
+      // them first, or the summary counts the pre-session world.
+      await flush().catch(() => {});
+      dropCache("/api");
+      api("/api/leaderboard").then(setBoard).catch(() => {});
+      api("/api/decks")
+        .then(async ({ decks }: any) => {
+          const counts = await dueCounts(decks);
+          const candidates = decks
+            .filter((deck: any) => deck.deck_id !== deckId && (counts[deck.deck_id] || 0) > 0)
+            .sort((a: any, b: any) => counts[b.deck_id]! - counts[a.deck_id]!);
+          if (candidates.length) {
+            setNextDeck({ ...candidates[0], due: counts[candidates[0].deck_id] });
+          }
+        })
+        .catch(() => {});
+    })();
   }, [deckId]);
 
   const reviewed = log.length;

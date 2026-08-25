@@ -11,10 +11,17 @@ export default function TabsLayout() {
   const palette = usePalette();
   const [requests, setRequests] = useState(0);
 
+  // Re-checked every minute, with a TTL shorter than the interval so each
+  // tick actually asks the server — a request accepted or declined anywhere
+  // clears the badge within a minute instead of never.
   useEffect(() => {
-    cached("/api/friends", 60_000)
-      .then((friends: any) => setRequests((friends.incoming || []).length))
-      .catch(() => {});
+    const check = () =>
+      cached("/api/friends", 15_000)
+        .then((friends: any) => setRequests((friends.incoming || []).length))
+        .catch(() => {});
+    check();
+    const timer = setInterval(check, 60_000);
+    return () => clearInterval(timer);
   }, []);
 
   const screen = (name: string, title: string, icon: string, badge?: number) => (

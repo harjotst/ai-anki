@@ -47,11 +47,15 @@ export function subscribeSession(fn: (kind: SessionKind) => void) {
   return () => void listeners.delete(fn);
 }
 
+let restored = false;
+
 if (supabase) {
   supabase.auth.onAuthStateChange((_event, session) => {
-    // Never let the provider's "no session" overwrite a dev session.
+    // Never let the provider's "no session" overwrite a dev session — and
+    // never let its INITIAL_SESSION null land before loadSession() has had
+    // the chance to restore one, which flashed the sign-in screen on boot.
     if (session) notify("supabase");
-    else if (!devToken) notify(null);
+    else if (restored && !devToken) notify(null);
   });
 }
 
@@ -81,6 +85,7 @@ export async function loadSession(): Promise<SessionKind> {
     devToken = await fetchDevToken();
     if (devToken) await AsyncStorage.setItem(DEV_TOKEN_KEY, devToken);
   }
+  restored = true;
   return (currentKind = devToken ? "dev" : null);
 }
 
@@ -212,7 +217,11 @@ export async function api(path: string, options: RequestInit = {}) {
   const response = await call(path, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({} as any));
-    throw new Error(body.detail || `${response.status}`);
+    const problem: any = new Error(body.detail || `${response.status}`);
+    // Callers that retry need to know a retry is pointless: a 4xx will
+    // fail identically forever, a 5xx or network error might not.
+    problem.status = response.status;
+    throw problem;
   }
   return response.status === 204 ? null : response.json();
 }

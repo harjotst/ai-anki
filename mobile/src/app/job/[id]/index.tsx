@@ -18,6 +18,7 @@ export default function JobRun() {
   const goBack = useGoBack();
   const [job, setJob] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
   const planFired = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -39,21 +40,38 @@ export default function JobRun() {
   // An uploaded job sits still until something starts it; the client joins
   // the two calls, exactly once.
   useEffect(() => {
-    if (!job || job.state !== "uploaded" || planFired.current) return;
+    if (!job || job.state !== "uploaded" || planFired.current || planError) return;
     planFired.current = true;
-    api(`/api/jobs/${jobId}/plan`, { method: "POST" }).then(refresh).catch((p) => setError(p.message));
-  }, [job, jobId, refresh]);
+    api(`/api/jobs/${jobId}/plan`, { method: "POST" }).then(refresh).catch((p) => {
+      // Re-arm, or Retry would show an eternal "Reading your material". The
+      // standing planError keeps the 2s poll from auto-refiring a bad plan.
+      planFired.current = false;
+      setPlanError(p.message);
+    });
+  }, [job, jobId, refresh, planError]);
 
   useEffect(() => {
     if (job?.state === "complete") router.replace(`/lessons/${jobId}`);
   }, [job, jobId, router]);
 
-  if (error) return <Frame title="Upload"><ErrorCard message={error} onRetry={refresh} /></Frame>;
+  // A failure before anything has loaded owns the screen. Once content is
+  // up, a failed background poll must NOT unmount it — plan edits live
+  // there — so it becomes a quiet retry row above the last-good render.
+  if (error && !job) return <Frame title="Upload"><ErrorCard message={error} onRetry={refresh} /></Frame>;
   if (!job) return <Frame title=""><Skeleton h={120} /></Frame>;
+
+  if (planError)
+    return (
+      <Frame title={job.source_filename || "Upload"}>
+        <ErrorCard message={planError} onRetry={() => { setPlanError(null); refresh(); }} />
+      </Frame>
+    );
+
+  const notice = error ? <RetryRow message={error} onRetry={refresh} /> : null;
 
   if (["uploaded", "planning"].includes(job.state))
     return (
-      <Frame title={job.source_filename || "Planning"}>
+      <Frame title={job.source_filename || "Planning"} notice={notice}>
         <CardBox style={{ padding: space[4], gap: space[1] }}>
           <T v="heading">Reading your material</T>
           <T v="secondary">
@@ -68,14 +86,14 @@ export default function JobRun() {
     );
 
   if (job.state === "plan_ready" && job.plan)
-    return <PlanReview job={job} onApproved={refresh} />;
+    return <PlanReview job={job} onApproved={refresh} notice={notice} />;
 
   if (job.state === "generating" || job.state === "reviewing")
-    return <Generating job={job} />;
+    return <Generating job={job} notice={notice} />;
 
   if (job.state === "interrupted")
     return (
-      <Frame title={job.source_filename || "Interrupted"}>
+      <Frame title={job.source_filename || "Interrupted"} notice={notice}>
         <CardBox style={{ padding: space[4], gap: space[2] }}>
           <T v="heading">Interrupted</T>
           <T v="secondary">
@@ -92,7 +110,7 @@ export default function JobRun() {
 
   if (job.state === "failed")
     return (
-      <Frame title={job.source_filename || "Failed"}>
+      <Frame title={job.source_filename || "Failed"} notice={notice}>
         <ErrorCard
           message={job.error || "This upload failed."}
           onRetry={() =>
@@ -106,14 +124,37 @@ export default function JobRun() {
       </Frame>
     );
 
-  return <Frame title=""><Skeleton h={120} /></Frame>;
+  if (job.state === "dead")
+    return (
+      <Frame title={job.source_filename || "Stopped"} notice={notice}>
+        <CardBox style={{ padding: space[4], gap: space[2] }}>
+          <T v="heading">Stopped</T>
+          <T v="secondary">
+            This failed several times in a row, so it stopped trying on its
+            own. Everything already written is safe; starting again runs only
+            what is left.
+          </T>
+          <Button title="Start again"
+            onPress={() =>
+              // Clearing is the required first step for a dead job — it must
+              // land before the resume call, so its failure is not swallowed.
+              api(`/api/jobs/${jobId}/clear`, { method: "POST" })
+                .then(() => api(`/api/jobs/${jobId}/${job.plan ? "generate" : "plan"}`, { method: "POST" }))
+                .then(refresh)
+                .catch((p) => setError(p.message))} />
+        </CardBox>
+      </Frame>
+    );
+
+  return <Frame title="" notice={notice}><Skeleton h={120} /></Frame>;
 }
 
 // The stack-screen shell: back chevron, centered caption title, and an
 // optional bar pinned below the scroll, above the home-indicator inset —
 // the native seat of the web's .bulkbar.
-function Frame({ title, caption, footer, children }: {
-  title: string; caption?: string; footer?: React.ReactNode; children: React.ReactNode;
+function Frame({ title, caption, notice, footer, children }: {
+  title: string; caption?: string; notice?: React.ReactNode;
+  footer?: React.ReactNode; children: React.ReactNode;
 }) {
   const router = useRouter();
   const goBack = useGoBack();
@@ -137,9 +178,29 @@ function Frame({ title, caption, footer, children }: {
           paddingBottom: footer ? space[4] : insets.bottom + space[4],
         }}
       >
+        {notice}
         {children}
       </ScrollView>
       {footer}
+    </View>
+  );
+}
+
+// A background poll failed after content had loaded: keep what the user is
+// looking at and offer a quiet retry instead of unmounting the screen.
+function RetryRow({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const palette = usePalette();
+  return (
+    <View style={{
+      flexDirection: "row", alignItems: "center", gap: space[2],
+      backgroundColor: palette.sunken, borderRadius: radius.md,
+      paddingHorizontal: 14, paddingVertical: space[1],
+    }}>
+      <T v="caption" numberOfLines={2} style={{ flex: 1 }}>{message}</T>
+      <Pressable onPress={onRetry}
+        style={{ minHeight: target.min, justifyContent: "center", paddingHorizontal: space[1] }}>
+        <T v="secondary" color={palette.accent} style={{ fontWeight: "600" }}>Retry</T>
+      </Pressable>
     </View>
   );
 }
@@ -162,7 +223,9 @@ function Hairline({ fraction }: { fraction: number }) {
 const slug = (text: string) =>
   text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "topic";
 
-function PlanReview({ job, onApproved }: { job: any; onApproved: () => void }) {
+function PlanReview({ job, onApproved, notice }: {
+  job: any; onApproved: () => void; notice?: React.ReactNode;
+}) {
   const palette = usePalette();
   const insets = useSafeAreaInsets();
   const [topics, setTopics] = useState<any[]>(job.plan.topics.map((t: any) => ({ ...t, dropped: false })));
@@ -209,6 +272,7 @@ function PlanReview({ job, onApproved }: { job: any; onApproved: () => void }) {
     <Frame
       title="Plan review"
       caption={job.source_filename}
+      notice={notice}
       footer={
         <View style={{
           flexDirection: "row", alignItems: "center", gap: space[3],
@@ -315,7 +379,7 @@ function PlanReview({ job, onApproved }: { job: any; onApproved: () => void }) {
 
 // --- generating --------------------------------------------------------------
 
-function Generating({ job }: { job: any }) {
+function Generating({ job, notice }: { job: any; notice?: React.ReactNode }) {
   const router = useRouter();
   const [topics, setTopics] = useState<any[]>([]);
   const [lessonCount, setLessonCount] = useState(0);
@@ -336,7 +400,7 @@ function Generating({ job }: { job: any }) {
   const current = topics.find((t) => t.status === "running");
 
   return (
-    <Frame title={job.deck_name || job.source_filename} caption="writing lessons and cards">
+    <Frame title={job.deck_name || job.source_filename} caption="writing lessons and cards" notice={notice}>
       <CardBox style={{ padding: 20, gap: space[2] }}>
         <Hairline fraction={topics.length ? done / topics.length : 0.08} />
         <T v="secondary" style={{ fontVariant: ["tabular-nums"] }}>

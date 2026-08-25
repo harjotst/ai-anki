@@ -113,16 +113,18 @@ export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
               <View style={{ flex: 1, height: 1, backgroundColor: palette.border }} />
             </View>
             <Button title="Continue with Google" kind="ghost" onPress={google} disabled={busy} />
-            {dev && (
-              <Button title="Use local dev data" kind="ghost"
-                onPress={() => run(async () => { if (await useDevData()) onSignedIn(); })} />
-            )}
           </>
-        ) : (
+        ) : !dev ? (
           <Cap>
             This build has no sign-in configured and no local development
-            server answered. Start one, then try again from You → Sign out.
+            server has answered yet. Start one and this screen will notice.
           </Cap>
+        ) : null}
+        {/* The dev path belongs to whichever branch is showing: a build
+            without auth config still signs in wherever a dev server answers. */}
+        {dev && (
+          <Button title="Use local dev data" kind="ghost"
+            onPress={() => run(async () => { if (await useDevData()) onSignedIn(); })} />
         )}
       </ScrollView>
     </KeyboardAvoidingView>

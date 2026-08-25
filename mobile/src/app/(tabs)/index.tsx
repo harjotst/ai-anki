@@ -1,7 +1,7 @@
 // Today: the only question a daily user has — what's due, and is the streak
 // safe. A native mirror of the web screen, fed by the same endpoints.
-import { type Href, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import { type Href, useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cached, dueCounts, localDay, streakFrom } from "../../lib/data";
@@ -110,6 +110,9 @@ export default function Today() {
   const palette = usePalette();
   const [decks, setDecks] = useState<any[] | null>(null);
   const [counts, setCounts] = useState<Record<string, number | null>>({});
+  // Decks land a beat before due counts do; until the first counts resolve,
+  // "nothing due" would be a guess, and a wrong one flashes "All clear".
+  const [countsReady, setCountsReady] = useState(false);
   const [activity, setActivity] = useState<any>(null);
   const [attention, setAttention] = useState<any[]>([]);
   const [writing, setWriting] = useState<Record<string, any>>({});
@@ -133,12 +136,15 @@ export default function Today() {
           .map((j: any) => [j.deck_id, j])
       ));
       setCounts(await dueCounts(deckList.decks));
+      setCountsReady(true);
     } catch (problem: any) {
       setError(problem.message);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // On focus, not just mount: coming back from a study session (which drops
+  // the cache) or a job screen must show the new numbers without a reload.
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const body = () => {
     if (error) return <ErrorCard message={error} onRetry={load} />;
@@ -183,6 +189,8 @@ export default function Today() {
             <Button title="Upload a lecture"
               onPress={() => router.push("/job/new" as Href)} />
           </CardBox>
+        ) : !countsReady ? (
+          <Skeleton h={150} r={radius.lg} />
         ) : (
           <CardBox style={{ padding: space[5] }}>
             {totalDue > 0 ? (

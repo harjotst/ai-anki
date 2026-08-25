@@ -19,7 +19,7 @@ export default function ClaimUsername({ onDone }: { onDone: () => void }) {
     try {
       await api("/api/me", {
         method: "PATCH",
-        body: JSON.stringify({ username: name.trim() }),
+        body: JSON.stringify({ username: name.trim().replace(/^@/, "") }),
       });
       onDone();
     } catch (problem: any) {

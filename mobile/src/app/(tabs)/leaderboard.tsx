@@ -2,8 +2,8 @@
 // loud, not codes you paste. Requests come first as cards, the week's board
 // is the centerpiece, and your own handle sits at the bottom ready to share.
 // The friend code still works server-side; it gets no pixels here.
-import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useState } from "react";
 import { Pressable, Share, TextInput, View } from "react-native";
 import { cached, dropCache } from "../../lib/data";
 import { api } from "../../lib/session";
@@ -68,7 +68,9 @@ export default function Leaderboard() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // On focus, not just mount — a username claimed on You, or reviews done
+  // in a study session, must land on the board when the tab comes back.
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   if (error) return <Screen><ErrorCard message={error} onRetry={load} /></Screen>;
   if (!board || !circle || !me) return (

@@ -5,7 +5,7 @@
 // rolls straight into the next topic's first step.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { type Href, useLocalSearchParams, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useGoBack } from "../../lib/nav";
@@ -32,9 +32,12 @@ export default function Lessons() {
   const [open, setOpen] = useState(0);
   const [sheet, setSheet] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Once anything has loaded, a flaky background poll must not replace the
+  // whole reader with an error card.
+  const loadedOnce = useRef(false);
+  const resumed = useRef(false);
 
   const load = useCallback(async () => {
-    setError(null);
     try {
       const [body, job, seen] = await Promise.all([
         api(`/api/jobs/${jobId}/lessons`),
@@ -44,12 +47,20 @@ export default function Lessons() {
       setLessons(body.lessons);
       setJobState(job.state);
       setRead(seen);
-      // Resume where they left off: the first unread lesson.
-      const firstUnread = body.lessons.findIndex((l: any) => !seen.has(l.topic_id));
-      if (firstUnread > 0) setOpen((current) => (current === 0 ? firstUnread : current));
+      setError(null);
+      loadedOnce.current = true;
+      // Resume where they left off: the first unread lesson — once per
+      // visit, or every poll would yank a person who navigated back to a
+      // topic they had already read.
+      if (!resumed.current && body.lessons.length) {
+        resumed.current = true;
+        const firstUnread = body.lessons.findIndex((l: any) => !seen.has(l.topic_id));
+        if (firstUnread > 0) setOpen((current) => (current === 0 ? firstUnread : current));
+      }
     } catch (problem: any) {
-      // An error is a retryable state — never a silent empty list.
-      setError(problem.message);
+      // An error is a retryable state — never a silent empty list. But
+      // background polls fail quietly; the next tick retries.
+      if (!loadedOnce.current) setError(problem.message);
     }
   }, [jobId]);
 

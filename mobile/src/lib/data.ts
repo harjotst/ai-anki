@@ -42,7 +42,14 @@ export function localDay(date: Date): string {
 export function streakFrom(days: { day: string }[], now = new Date()) {
   const studied = new Set(days.map((d) => d.day));
   const iso = localDay;
-  const dayBefore = (date: Date) => new Date(date.getTime() - 86_400_000);
+  // By calendar day, never by 24 hours: a local day is 23 or 25 hours twice
+  // a year, and fixed-milliseconds stepping skips or repeats a day exactly
+  // when someone studies near midnight across a DST change.
+  const dayBefore = (date: Date) => {
+    const previous = new Date(date);
+    previous.setDate(previous.getDate() - 1);
+    return previous;
+  };
 
   const today = iso(now);
   const studiedToday = studied.has(today);
@@ -78,7 +85,8 @@ export function heatCells(days: { day: string; reviews: number }[], now = new Da
   const total = weeks * 7;
   const cells: { day: string; count: number; level: number }[] = [];
   for (let back = total - 1; back >= 0; back--) {
-    const date = new Date(now.getTime() - back * 86_400_000);
+    const date = new Date(now);
+    date.setDate(date.getDate() - back);
     const key = localDay(date);
     const count = byDay[key] || 0;
     const level = count === 0 ? 0 : count < 5 ? 1 : count < 15 ? 2 : count < 40 ? 3 : 4;

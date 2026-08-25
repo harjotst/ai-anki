@@ -6,7 +6,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { type Href, useLocalSearchParams, useRouter } from "expo-router";
 import { useGoBack } from "../../../lib/nav";
 import * as Sharing from "expo-sharing";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, TextInput, View, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cached, dropCache } from "../../../lib/data";
@@ -27,6 +27,7 @@ export default function DeckDetail() {
   const [due, setDue] = useState<any[] | null>(null);
   const [mastery, setMastery] = useState<any>(null);
   const [jobs, setJobs] = useState<any[]>([]);
+  const [deckJobs, setDeckJobs] = useState<any[]>([]);
   const [segment, setSegment] = useState("topics");
   const [cards, setCards] = useState<any[] | null>(null);
   const [search, setSearch] = useState("");
@@ -39,14 +40,20 @@ export default function DeckDetail() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [deckList, jobList] = await Promise.all([
+      const [deckList, jobList, deckJobList] = await Promise.all([
         cached("/api/decks", 30_000),
         cached("/api/jobs", 30_000),
+        // The deck's own jobs: /api/jobs lists only the caller's, so on a
+        // shared deck it is empty and topics/export would go dead. This
+        // endpoint answers for owner and recipients alike — complete and
+        // reviewing only, newest first.
+        cached(`/api/decks/${id}/jobs`, 30_000).catch(() => ({ jobs: [] })),
       ]);
       const found = deckList.decks.find((d: any) => d.deck_id === id);
       if (!found) throw new Error("no such deck");
       setDeck(found);
       setJobs(jobList.jobs.filter((job: any) => job.deck_id === id));
+      setDeckJobs(deckJobList.jobs);
       const [dueBody, masteryBody] = await Promise.all([
         api(`/api/decks/${id}/due`).catch(() => ({ cards: [] })),
         api(`/api/decks/${id}/mastery`).catch(() => null),
@@ -66,13 +73,7 @@ export default function DeckDetail() {
     }
   }, [segment, cards, id]);
 
-  const dueByTopic = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const card of due || []) counts[card.topic_id] = (counts[card.topic_id] || 0) + 1;
-    return counts;
-  }, [due]);
-
-  const latestCompleteJob = jobs.find((job) => ["complete", "reviewing"].includes(job.state));
+  const latestCompleteJob = deckJobs[0];
 
   // The same row surface as the web's .navrow.
   const navrow = (pressed: boolean): ViewStyle => ({
@@ -115,13 +116,24 @@ export default function DeckDetail() {
     const name = deck.name.replace(/[^\w\- ]+/g, "").trim() || "deck";
     setExportBusy(true);
     try {
+      // update=true: the server ships only cards never exported plus, when
+      // asked, edited ones — without asking, any re-export after edits still
+      // 409s with "nothing new".
       const result = await FileSystem.downloadAsync(
-        `${BASE}/api/jobs/${latestCompleteJob.job_id}/deck.apkg`,
+        `${BASE}/api/jobs/${latestCompleteJob.job_id}/deck.apkg?update=true`,
         `${FileSystem.cacheDirectory}${name}.apkg`,
         { headers: (await authHeaders()) as Record<string, string> },
       );
-      // downloadAsync saves error bodies instead of throwing; check the status.
-      if (result.status !== 200) throw new Error(`export failed (${result.status})`);
+      // downloadAsync saves error bodies instead of throwing; on a non-200
+      // the file on disk is the server's JSON error, so read its detail —
+      // "nothing new to download" beats a cryptic status code.
+      if (result.status !== 200) {
+        const body = await FileSystem.readAsStringAsync(result.uri).catch(() => "");
+        let detail: string | undefined;
+        try { detail = JSON.parse(body).detail; } catch { /* not JSON */ }
+        await FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => {});
+        throw new Error(detail || `export failed (${result.status})`);
+      }
       await Sharing.shareAsync(result.uri);
     } catch (problem: any) {
       toast(problem.message);
@@ -169,7 +181,7 @@ export default function DeckDetail() {
             disabled={deck.shared_with_me} onPress={() => router.push(`/job/new?deck=${id}` as Href)} />
           <Button title="Share" kind="ghost" style={{ flex: 1, paddingHorizontal: space[1] }}
             disabled={deck.shared_with_me} onPress={() => setMenu("share")} />
-          <Button title={exportBusy ? "Exporting…" : "Export .apkg"} kind="ghost"
+          <Button title={exportBusy ? "Exporting…" : "Export"} kind="ghost"
             style={{ flex: 1, paddingHorizontal: space[1] }}
             disabled={exportBusy} onPress={exportDeck} />
         </View>
@@ -187,14 +199,18 @@ export default function DeckDetail() {
               const topicId =
                 topic.topic_id ||
                 (due || []).find((c: any) => c.deck_path === topic.deck_path)?.topic_id;
-              const dueHere = Object.entries(dueByTopic)
-                .filter(([tid]) => (due || []).some((c: any) => c.topic_id === tid && c.deck_path === topic.deck_path))
-                .reduce((sum, [, n]) => sum + n, 0);
+              // Counted by deck_path directly: imported decks stamp every
+              // card topic_id 'imported', so any topic_id-keyed count hands
+              // each subdeck row the whole deck's due pile.
+              const dueHere = (due || []).filter((c: any) => c.deck_path === topic.deck_path).length;
               const pct = Math.round(topic.mastery * 100);
               return (
                 <Pressable key={topic.deck_path}
                   onPress={() => {
-                    if (topicId && latestCompleteJob) router.push(`/deck/${id}/topic/${topicId}`);
+                    // 'imported' marks cards that arrived in an .apkg — no
+                    // lesson exists behind them, so the row goes nowhere.
+                    if (topicId && topicId !== "imported" && latestCompleteJob)
+                      router.push(`/deck/${id}/topic/${topicId}`);
                   }}
                   style={({ pressed }) => navrow(pressed)}>
                   <View style={{ flex: 1, gap: 2 }}>
@@ -261,7 +277,7 @@ export default function DeckDetail() {
               <View key={job.job_id} style={navrow(false)}>
                 <View style={{ flex: 1, gap: 2 }}>
                   <T v="secondary" style={{ fontWeight: "600", color: palette.text }} numberOfLines={1}>
-                    {job.source_filename}
+                    {job.source_filename || "Imported"}
                   </T>
                   <Cap>
                     {new Date(job.created_at).toLocaleDateString()} ·{" "}
@@ -269,7 +285,7 @@ export default function DeckDetail() {
                     {job.card_count ? ` · ${job.card_count} cards` : ""}
                   </Cap>
                 </View>
-                {["interrupted", "failed", "plan_ready", "generating", "planning"].includes(job.state) && (
+                {["interrupted", "failed", "dead", "plan_ready", "generating", "planning"].includes(job.state) && (
                   <Button kind="ghost" onPress={() => router.push(`/job/${job.job_id}` as Href)}
                     title={job.state === "interrupted" ? "Resume" : job.state === "failed" ? "Retry" : "Open"} />
                 )}

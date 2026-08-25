@@ -6,7 +6,8 @@
 // outside spans gets a conservative upgrade of well-known tokens (Vmax, Km,
 // kcat, Ca2+…) so content written before this existed improves too.
 import React from "react";
-import { Text, TextStyle } from "react-native";
+import { Text, TextStyle, View } from "react-native";
+import { space } from "../theme";
 
 type Piece = { text: string; kind: "plain" | "sub" | "sup" };
 
@@ -171,12 +172,20 @@ export type SciWord = { pieces: Piece[]; spoken: string };
  *  is what keeps the highlight aligned with the voice — the screen shows
  *  $V_{max}$ as one word even though the voice says two. */
 export function sciWords(text: string): SciWord[] {
-  const words: SciWord[] = [];
+  return sciParagraphs(text).flat();
+}
+
+/** The same words, grouped into paragraphs at blank lines (runs of two or
+ *  more newlines). One pass builds both: flattening the groups IS
+ *  sciWords(text), which is what keeps ReadAloud's flat word indexing
+ *  aligned when SciText renders each paragraph as its own block. */
+export function sciParagraphs(text: string): SciWord[][] {
+  const paragraphs: SciWord[][] = [[]];
   let current: Piece[] = [];
   const flush = () => {
     if (!current.length) return;
     const joined = current.map((piece) => piece.text).join("");
-    words.push({ pieces: current, spoken: speakableWord(joined) });
+    paragraphs[paragraphs.length - 1].push({ pieces: current, spoken: speakableWord(joined) });
     current = [];
   };
   for (const piece of sciPieces(text)) {
@@ -187,12 +196,16 @@ export function sciWords(text: string): SciWord[] {
     const chunks = piece.text.split(/(\s+)/);
     for (const chunk of chunks) {
       if (!chunk) continue;
-      if (/^\s+$/.test(chunk)) flush();
-      else current.push({ text: chunk, kind: "plain" });
+      if (/^\s+$/.test(chunk)) {
+        flush();
+        if (/\n{2,}/.test(chunk) && paragraphs[paragraphs.length - 1].length) {
+          paragraphs.push([]);
+        }
+      } else current.push({ text: chunk, kind: "plain" });
     }
   }
   flush();
-  return words;
+  return paragraphs.filter((paragraph) => paragraph.length);
 }
 
 function speakableWord(text: string): string {
@@ -215,13 +228,15 @@ export function SciText({ text, style, highlight, accentSoft, accent }: {
   accentSoft?: string;
   accent?: string;
 }) {
-  const words = sciWords(text);
+  const paragraphs = sciParagraphs(text);
   const base = Array.isArray(style) ? Object.assign({}, ...style) : style || {};
   const small = Math.round((base.fontSize ?? 16) * 0.72);
-  return (
-    <Text style={style}>
+  // Word numbering runs flat across paragraphs — paragraph order is
+  // sciWords order — so the voice's highlight index lands unchanged.
+  const block = (words: SciWord[], from: number, key: number) => (
+    <Text key={key} style={style}>
       {words.map((word, w) => {
-        const lit = w === highlight;
+        const lit = from + w === highlight;
         // Background and color only: a bold highlight changes glyph widths
         // and ripples the whole paragraph every time the voice moves.
         const wordStyle = lit
@@ -241,5 +256,16 @@ export function SciText({ text, style, highlight, accentSoft, accent }: {
         );
       })}
     </Text>
+  );
+  if (paragraphs.length <= 1) return block(paragraphs[0] ?? [], 0, 0);
+  let from = 0;
+  return (
+    <View style={{ gap: space[2] }}>
+      {paragraphs.map((words, p) => {
+        const rendered = block(words, from, p);
+        from += words.length;
+        return rendered;
+      })}
+    </View>
   );
 }

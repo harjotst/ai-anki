@@ -186,3 +186,31 @@ def test_a_comparison_names_the_person_it_is_comparing_against(boot, claude):
 
         assert friend["display_name"]
         assert friend["display_name"] != friend["account_id"]
+
+
+def test_a_member_can_reach_the_jobs_that_built_a_shared_deck(boot, claude):
+    """The lessons live under jobs, and /api/jobs lists only your own — so
+    without this endpoint a share recipient could study the cards but never
+    read the teaching behind them."""
+    from tests.conftest import SOMEBODY_ELSE, TESTER
+    from tests.test_study import studied_deck
+
+    with boot() as machine:
+        deck_id, job_id = studied_deck(machine, claude)
+        machine.sign_in_as(SOMEBODY_ELSE)
+        code = machine.get("/api/me").json()["friend_code"]
+        machine.sign_in_as(TESTER)
+        machine.post("/api/friends", json={"code": code})
+        machine.sign_in_as(SOMEBODY_ELSE)
+        machine.post(f"/api/friends/{TESTER}/accept")
+        machine.sign_in_as(TESTER)
+        machine.post(f"/api/decks/{deck_id}/share", json={"account_id": SOMEBODY_ELSE})
+
+        machine.sign_in_as(SOMEBODY_ELSE)
+        listed = machine.get(f"/api/decks/{deck_id}/jobs")
+        assert listed.status_code == 200, listed.text
+        assert [j["job_id"] for j in listed.json()["jobs"]] == [job_id]
+
+        # A stranger still sees nothing.
+        machine.sign_in_as("00000000-0000-0000-0000-000000000003")
+        assert machine.get(f"/api/decks/{deck_id}/jobs").status_code == 404

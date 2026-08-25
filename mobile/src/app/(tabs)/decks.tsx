@@ -1,8 +1,8 @@
 // The deck library: yours, then what friends gave you. Rows navigate; every
 // action lives in deck detail, because inline blur-save rename is dead.
 import * as DocumentPicker from "expo-document-picker";
-import { type Href, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import { type Href, useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useState } from "react";
 import { View } from "react-native";
 import { cached, dropCache, dueCounts } from "../../lib/data";
 import { upload } from "../../lib/session";
@@ -26,7 +26,9 @@ export default function Decks() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // On focus, not just mount — due counts move while this tab sits behind
+  // a study session, and the cache was dropped when it ended.
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   // Href cast: the generated route types refresh only when the dev server
   // runs, and /job/new lands in this same change set.

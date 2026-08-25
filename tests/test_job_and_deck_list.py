@@ -91,7 +91,9 @@ def test_a_deck_says_how_much_is_in_it_and_when_it_was_last_exported(client, cla
 def test_a_deck_can_be_renamed_because_a_filename_is_not_a_deck_name(client, claude):
     job_id = upload(client)
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
-    assert client.get("/api/decks").json()["decks"][0]["name"] == "lecture.txt"
+    # The default name is now already human (extension and underscores
+    # gone), and renaming still beats any default.
+    assert client.get("/api/decks").json()["decks"][0]["name"] == "lecture"
 
     renamed = client.patch(f"/api/decks/{deck_id}", json={"name": "Biochem 301"})
 

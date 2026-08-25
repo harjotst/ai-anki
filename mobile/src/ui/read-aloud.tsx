@@ -10,7 +10,7 @@ import Slider from "@react-native-community/slider";
 import * as Speech from "expo-speech";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import React from "react";
-import { View } from "react-native";
+import { Platform, View } from "react-native";
 import { radius, space, target, usePalette } from "../theme";
 import { IconBtn } from "./index";
 import { sciWords } from "./sci";
@@ -127,17 +127,36 @@ export function useReadAloud(parts: string[]): ReadAloudControl {
     });
   }, [built, wordAt]);
 
-  const toggle = useCallback(() => {
-    if (state === "playing") {
+  // Android's synthesizer has no pause/resume — Speech.pause() throws an
+  // UnavailabilityError. There, pausing stops the utterance while keeping
+  // the current word, and resuming restarts speech from that word. iOS
+  // keeps the native pair.
+  const pause = useCallback(() => {
+    if (Platform.OS === "android") {
+      // The stop's callbacks belong to no one: without a new generation,
+      // the old utterance's "done" would wipe the paused state.
+      generation.current += 1;
+      Speech.stop();
+    } else {
       Speech.pause();
-      setState("paused");
-    } else if (state === "paused") {
+    }
+    setState("paused");
+  }, []);
+
+  const resume = useCallback(() => {
+    if (Platform.OS === "android") {
+      speakFrom(current ?? 0);
+    } else {
       Speech.resume();
       setState("playing");
-    } else {
-      speakFrom(0);
     }
-  }, [state, speakFrom]);
+  }, [speakFrom, current]);
+
+  const toggle = useCallback(() => {
+    if (state === "playing") pause();
+    else if (state === "paused") resume();
+    else speakFrom(0);
+  }, [state, pause, resume, speakFrom]);
 
   const clamp = useCallback(
     (word: number) => Math.max(0, Math.min(built.total - 1, word)),
@@ -151,11 +170,8 @@ export function useReadAloud(parts: string[]): ReadAloudControl {
     restart: useCallback(() => speakFrom(0), [speakFrom]),
     seek: useCallback((word: number) => speakFrom(clamp(word)), [speakFrom, clamp]),
     beginScrub: useCallback(() => {
-      if (state === "playing") {
-        Speech.pause();
-        setState("paused");
-      }
-    }, [state]),
+      if (state === "playing") pause();
+    }, [state, pause]),
     preview: useCallback((word: number) => setCurrent(clamp(word)), [clamp]),
     current,
     total: built.total,

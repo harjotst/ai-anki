@@ -268,7 +268,11 @@ def test_studying_is_per_person_even_on_the_same_card(boot, claude):
         assert machine.get("/api/me/activity").json()["reviews"] == 1
 
 
-def test_a_review_of_a_card_you_do_not_own_is_refused(boot, claude):
+def test_a_review_of_a_card_you_do_not_own_is_skipped_not_recorded(boot, claude):
+    """Skipped and named, rather than failing the batch: a 404 for one dead
+    row used to jam a client's whole queue behind it forever. The security
+    property is unchanged — nothing is recorded for a card that is not
+    yours — but the reply now says so instead of refusing everything."""
     from tests.conftest import SOMEBODY_ELSE
 
     with boot() as machine:
@@ -276,9 +280,11 @@ def test_a_review_of_a_card_you_do_not_own_is_refused(boot, claude):
         card = due(machine, deck_id)[0]["card_uuid"]
 
         machine.sign_in_as(SOMEBODY_ELSE)
-        refused = answer(machine, card, "good", client_uuid="theirs")
+        reply = answer(machine, card, "good", client_uuid="theirs")
 
-        assert refused.status_code == 404
+        assert reply.status_code == 200
+        assert reply.json()["accepted"] == 0
+        assert reply.json()["skipped"] == ["theirs"]
 
 
 def test_a_cloze_card_is_asked_rather_than_shown(client, claude):
