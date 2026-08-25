@@ -12,6 +12,7 @@ import { enqueue, flush, pendingCount, removeQueued, subscribe, uuid } from "../
 import { api } from "../../lib/session";
 import { radius, space, target, usePalette } from "../../theme";
 import { Button, Cap, CardBox, CardText, ErrorCard, Icon, IconBtn, Pill, Sheet, Skeleton, T, useToast } from "../../ui";
+import { Sci } from "../../ui/sci";
 
 const RATING_META: [string, string][] = [
   ["again", "Again"], ["hard", "Hard"], ["good", "Good"], ["easy", "Easy"],
@@ -170,9 +171,8 @@ export default function Study() {
         {revealed && (
           <>
             <View style={{ height: 1, backgroundColor: palette.border }} />
-            <T v="body" color={palette.text2} style={{ fontSize: 18, lineHeight: 27 }}>
-              {card.back || card.front}
-            </T>
+            <Sci text={card.back || card.front}
+              style={{ fontSize: 18, lineHeight: 27, color: palette.text2 }} />
             <Cap>{card.deck_path}</Cap>
           </>
         )}
@@ -383,8 +383,9 @@ function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; 
           </Pressable>
           {missOpen && misses.map((card) => (
             <View key={card.card_uuid} style={{ gap: 6, borderTopWidth: 1, borderTopColor: palette.border, paddingTop: 10 }}>
-              <T v="body" style={{ fontWeight: "600" }}>{card.rendered_front || card.front}</T>
-              <T v="secondary">{card.back}</T>
+              <Sci text={card.rendered_front || card.front}
+                style={{ fontSize: 16, lineHeight: 24, fontWeight: "600", color: palette.text }} />
+              <Sci text={card.back} style={{ fontSize: 14, lineHeight: 20, color: palette.text2 }} />
               <View style={{ flexDirection: "row" }}>
                 <Button title="Edit" kind="ghost" onPress={() => setEditing(card)} />
               </View>

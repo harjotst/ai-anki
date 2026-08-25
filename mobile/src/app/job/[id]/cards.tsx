@@ -10,6 +10,7 @@ import { dropCache } from "../../../lib/data";
 import { api } from "../../../lib/session";
 import { radius, space, target, usePalette } from "../../../theme";
 import { Button, Cap, CardBox, ErrorCard, Icon, IconBtn, Pill, Skeleton, T, useToast } from "../../../ui";
+import { Sci } from "../../../ui/sci";
 import { EditSheet } from "../../study/[deckId]";
 
 // The web's btn-small, without dropping under the touch floor.
@@ -221,8 +222,11 @@ export default function CardsReview() {
                   {picked.has(card.card_uuid) && <Icon name="check" size={14} color={palette.onAccent} />}
                 </Pressable>
                 <View style={{ flex: 1, gap: space[0] }}>
-                  <T v="body" style={{ fontWeight: "600" }}>{card.rendered_front || card.front}</T>
-                  {card.back ? <T v="secondary">{card.back}</T> : null}
+                  <Sci text={card.rendered_front || card.front}
+                    style={{ fontSize: 16, lineHeight: 24, fontWeight: "600", color: palette.text }} />
+                  {card.back ? (
+                    <Sci text={card.back} style={{ fontSize: 14, lineHeight: 20, color: palette.text2 }} />
+                  ) : null}
                   {card.downgraded && (
                     <View style={{
                       alignSelf: "flex-start", borderRadius: radius.pill,

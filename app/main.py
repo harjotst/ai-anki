@@ -35,6 +35,7 @@ def create_app(
     per_job_token_ceiling: int = budget.PER_JOB_TOKEN_CEILING,
     daily_budget_usd: float = budget.DAILY_BUDGET_USD,
     global_daily_budget_usd: float = budget.GLOBAL_DAILY_BUDGET_USD,
+    allowed_emails: frozenset[str] | None = None,
     # Who is allowed in. Injected rather than built from the environment here,
     # so tests exercise the real verification against their own signing key.
     verifier: identity.Verifier | None = None,
@@ -91,7 +92,12 @@ def create_app(
         await worker.drain()
 
     app = FastAPI(title="ai-anki", lifespan=lifespan)
-    app.add_middleware(auth.Guard, database_url=database_url, verifier=verifier)
+    app.add_middleware(
+        auth.Guard,
+        database_url=database_url,
+        verifier=verifier,
+        allowed_emails=allowed_emails,
+    )
 
     async def get_conn():
         # Async so the connection is created and used on the same thread. A sync

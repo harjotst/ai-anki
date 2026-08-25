@@ -44,8 +44,10 @@ LESSON = {
         }
     ],
     "check_yourself": [
-        "Why is the net ATP yield two rather than four?",
-        "What makes glycolysis usable without oxygen?",
+        {
+            "question": "Why does blocking transpeptidase kill a growing cell but spare a resting one?",
+            "answer": "Only growing cells rebuild wall; without cross-links the new wall cannot hold pressure.",
+        }
     ],
 }
 

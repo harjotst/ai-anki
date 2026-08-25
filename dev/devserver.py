@@ -28,10 +28,17 @@ def token(sub="00000000-0000-0000-0000-0000000000aa"):
 
 open(os.environ.get("DEV_TOKEN_FILE", "/tmp/dev-token.txt"), "w").write(token())
 
+allowed = os.environ.get("AI_ANKI_ALLOWED_EMAILS", "").strip()
+
 app = create_app(
     database_url=os.environ["AI_ANKI_DATABASE_URL"],
     data_dir=os.environ.get("AI_ANKI_DATA_DIR", ".local/uploads"),
     verifier=identity.Verifier(issuer=ISSUER, audience=AUDIENCE, fetch_keys=jwks),
+    allowed_emails=(
+        frozenset(p.strip().lower() for p in allowed.split(",") if p.strip())
+        if allowed
+        else None
+    ),
 )
 
 # Hand any local client a signed token, so neither the browser nor the phone

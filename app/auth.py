@@ -83,10 +83,23 @@ class Guard:
     exactly how that gets lost.
     """
 
-    def __init__(self, app, *, database_url: str, verifier: identity.Verifier):
+    def __init__(
+        self,
+        app,
+        *,
+        database_url: str,
+        verifier: identity.Verifier,
+        allowed_emails: frozenset[str] | None = None,
+    ):
         self.app = app
         self._database_url = database_url
         self._verifier = verifier
+        # A private build: only these verified addresses get in at all. None
+        # means open — the public product; a set means a household. Checked
+        # against the PROVIDER's verified email claim, before any account row
+        # exists, so a stranger's sign-in leaves no trace and reaches nothing
+        # that costs money.
+        self._allowed_emails = allowed_emails
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http" or not scope["path"].startswith(API_PREFIX):
@@ -110,6 +123,17 @@ class Guard:
             # exactly what somebody probing wants told.
             await self._refuse(401, "sign in to continue", scope, receive, send)
             return
+
+        if self._allowed_emails is not None:
+            email = str(claims.get("email") or "").strip().lower()
+            if email not in self._allowed_emails:
+                # Authenticated, and still not welcome: this build belongs to
+                # named people. Said plainly — a 401 would send the client
+                # into refresh loops for a state no refresh can fix.
+                await self._refuse(
+                    403, "this build is private", scope, receive, send
+                )
+                return
 
         conn = db.connect(self._database_url)
         try:

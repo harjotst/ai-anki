@@ -163,10 +163,30 @@ LESSON_SCHEMA = {
         "check_yourself": {
             "type": "array",
             "minItems": 1,
-            "items": {"type": "string"},
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["question", "answer"],
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "Tests understanding rather than recall, which the "
+                            "cards will cover."
+                        ),
+                    },
+                    "answer": {
+                        "type": "string",
+                        "description": (
+                            "The answer, in at most two sentences — revealed "
+                            "only after the reader commits to their own."
+                        ),
+                    },
+                },
+            },
             "description": (
-                "One or two questions — never more — to answer before moving to the cards. They test "
-                "understanding rather than recall, which the cards will cover."
+                "One or two questions — never more — to answer before moving "
+                "to the cards."
             ),
         },
     },

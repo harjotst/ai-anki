@@ -239,3 +239,25 @@ def test_only_the_author_edits_deletes_or_rerolls_a_card(boot, claude):
         machine.sign_in_as(TESTER)
         fine = machine.patch(f"/api/cards/{card['card_uuid']}", json={"front": card["front"], "back": card["back"]})
         assert fine.status_code == 200, fine.text
+
+
+def test_a_private_build_admits_exactly_its_named_addresses(boot):
+    """The household deployment: two verified emails in, everybody else 403
+    — plainly, before any account row exists, so a stranger's sign-in
+    neither reaches the API key nor leaves a trace."""
+    with boot(allowed_emails=frozenset({"harjot@example.test", "gf@example.test"})) as machine:
+        machine.sign_in_as(TESTER, email="harjot@example.test")
+        assert machine.get("/api/decks").status_code == 200
+
+        machine.sign_in_as(SOMEBODY_ELSE, email="stranger@example.test")
+        refused = machine.get("/api/decks")
+        assert refused.status_code == 403
+        assert refused.json()["detail"] == "this build is private"
+
+        # Case never decides access.
+        machine.sign_in_as("00000000-0000-0000-0000-000000000003", email="GF@Example.Test")
+        assert machine.get("/api/decks").status_code == 200
+
+
+def test_an_unset_allowlist_means_open(client):
+    assert client.get("/api/decks").status_code == 200

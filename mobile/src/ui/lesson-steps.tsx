@@ -27,7 +27,7 @@ type Step =
   | { kind: "section"; heading: string; body: string; builds_on?: string }
   | { kind: "example"; problem: string; walkthrough: string }
   | { kind: "trap"; belief: string; correction: string }
-  | { kind: "check"; question: string }
+  | { kind: "check"; question: string; answer?: string }
   | { kind: "done" };
 
 export function LessonSteps({
@@ -63,8 +63,11 @@ export function LessonSteps({
     for (const myth of lesson.misconceptions ?? []) {
       list.push({ kind: "trap", belief: myth.belief, correction: myth.why_it_is_wrong });
     }
-    for (const question of lesson.check_yourself ?? []) {
-      list.push({ kind: "check", question });
+    for (const check of lesson.check_yourself ?? []) {
+      // Both shapes live in the wild: early lessons stored bare question
+      // strings; newer ones carry the answer to reveal.
+      if (typeof check === "string") list.push({ kind: "check", question: check });
+      else list.push({ kind: "check", question: check.question, answer: check.answer });
     }
     list.push({ kind: "done" });
     return list;
@@ -75,7 +78,11 @@ export function LessonSteps({
   const at = Math.min(index, steps.length - 1);
   const step = steps[at];
   const isRevealed = revealed.has(at);
-  const needsReveal = (step.kind === "example" || step.kind === "trap") && !isRevealed;
+  const needsReveal =
+    (step.kind === "example" ||
+      step.kind === "trap" ||
+      (step.kind === "check" && Boolean(step.answer))) &&
+    !isRevealed;
 
   // A soft cross-step fade: paging, not flashing.
   const fade = useRef(new Animated.Value(1)).current;
@@ -88,6 +95,7 @@ export function LessonSteps({
     step.kind === "done" ? footerLabel
     : step.kind === "example" && needsReveal ? "Show the walkthrough"
     : step.kind === "trap" && needsReveal ? "Why that's wrong"
+    : step.kind === "check" && needsReveal ? "Show the answer"
     : "Continue";
 
   const onPrimary = () => {
@@ -109,7 +117,7 @@ export function LessonSteps({
         return isRevealed ? [belief, step.correction] : [belief];
       }
       case "check":
-        return [step.question];
+        return step.answer && isRevealed ? [step.question, step.answer] : [step.question];
       case "done":
         return [];
     }
@@ -179,9 +187,19 @@ export function LessonSteps({
             <Cap style={{ letterSpacing: 0.7 }}>CHECK YOURSELF</Cap>
             <SciText text={step.question} highlight={lit(0)} accentSoft={palette.accentSoft} accent={palette.accent}
               style={{ ...focal, color: palette.text }} />
-            <T v="secondary" color={palette.muted} style={{ fontStyle: "italic" }}>
-              Answer it in your head first
-            </T>
+            {step.answer ? (
+              isRevealed && (
+                <>
+                  <View style={{ height: 1, backgroundColor: palette.border }} />
+                  <SciText text={step.answer} highlight={lit(1)} accentSoft={palette.accentSoft} accent={palette.accent}
+                    style={{ ...prose, color: palette.text }} />
+                </>
+              )
+            ) : (
+              <T v="secondary" color={palette.muted} style={{ fontStyle: "italic" }}>
+                Commit to an answer before you continue.
+              </T>
+            )}
           </>
         );
       case "done":
