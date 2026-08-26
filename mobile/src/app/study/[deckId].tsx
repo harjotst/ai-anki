@@ -7,6 +7,7 @@ import { useGoBack } from "../../lib/nav";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { answerText } from "../../lib/cloze";
 import { cached, dropCache, dueCounts } from "../../lib/data";
 import { enqueue, flush, pendingCount, removeQueued, subscribe, uuid } from "../../lib/queue";
 import { api } from "../../lib/session";
@@ -171,8 +172,13 @@ export default function Study() {
         {revealed && (
           <>
             <View style={{ height: 1, backgroundColor: palette.border }} />
-            <Sci text={card.back || card.front}
+            <Sci text={answerText(card)}
               style={{ fontSize: 18, lineHeight: 27, color: palette.text2 }} />
+            {/* A cloze's back, when it exists, is extra context under the
+                revealed sentence — never the answer itself. */}
+            {card.note_type === "cloze" && !!card.back && card.back !== card.front && (
+              <Sci text={card.back} style={{ fontSize: 15, lineHeight: 22, color: palette.muted }} />
+            )}
             <Cap>{card.deck_path}</Cap>
           </>
         )}
@@ -385,7 +391,7 @@ function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; 
             <View key={card.card_uuid} style={{ gap: 6, borderTopWidth: 1, borderTopColor: palette.border, paddingTop: 10 }}>
               <Sci text={card.rendered_front || card.front}
                 style={{ fontSize: 16, lineHeight: 24, fontWeight: "600", color: palette.text }} />
-              <Sci text={card.back} style={{ fontSize: 14, lineHeight: 20, color: palette.text2 }} />
+              <Sci text={answerText(card)} style={{ fontSize: 14, lineHeight: 20, color: palette.text2 }} />
               <View style={{ flexDirection: "row" }}>
                 <Button title="Edit" kind="ghost" onPress={() => setEditing(card)} />
               </View>

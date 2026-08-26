@@ -9,6 +9,7 @@ import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, TextInput, View, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { answerText, clozeReveal } from "../../../lib/cloze";
 import { cached, dropCache } from "../../../lib/data";
 import { api, authHeaders, BASE } from "../../../lib/session";
 import { radius, space, target, usePalette } from "../../../theme";
@@ -260,8 +261,10 @@ export default function DeckDetail() {
                   <Pressable key={card.card_uuid} onPress={() => setEditing(card)}
                     style={({ pressed }) => navrow(pressed)}>
                     <View style={{ flex: 1, gap: 2 }}>
-                      <T v="body" style={{ fontWeight: "600" }} numberOfLines={1}>{card.front}</T>
-                      <T v="caption" numberOfLines={1} style={{ letterSpacing: 0.2 }}>{card.back}</T>
+                      <T v="body" style={{ fontWeight: "600" }} numberOfLines={1}>{clozeReveal(card.front)}</T>
+                      <T v="caption" numberOfLines={1} style={{ letterSpacing: 0.2 }}>
+                        {card.note_type === "cloze" ? card.back || "cloze" : answerText(card)}
+                      </T>
                     </View>
                     <Icon name="edit" size={16} color={palette.muted} />
                   </Pressable>

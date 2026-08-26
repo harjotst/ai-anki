@@ -6,6 +6,7 @@ import { useGoBack } from "../../../lib/nav";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { answerText } from "../../../lib/cloze";
 import { dropCache } from "../../../lib/data";
 import { api } from "../../../lib/session";
 import { radius, space, target, usePalette } from "../../../theme";
@@ -224,8 +225,10 @@ export default function CardsReview() {
                 <View style={{ flex: 1, gap: space[0] }}>
                   <Sci text={card.rendered_front || card.front}
                     style={{ fontSize: 16, lineHeight: 24, fontWeight: "600", color: palette.text }} />
-                  {card.back ? (
-                    <Sci text={card.back} style={{ fontSize: 14, lineHeight: 20, color: palette.text2 }} />
+                  {/* A cloze's answer lives in its front; without this the
+                      review row showed a question and no answer at all. */}
+                  {answerText(card) ? (
+                    <Sci text={answerText(card)} style={{ fontSize: 14, lineHeight: 20, color: palette.text2 }} />
                   ) : null}
                   {card.downgraded && (
                     <View style={{
