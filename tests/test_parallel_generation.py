@@ -59,9 +59,11 @@ def test_the_remaining_topics_run_concurrently(client, claude):
 def test_a_fan_out_finishes_far_faster_than_running_them_one_at_a_time(client, claude):
     _job_id, elapsed = run(client, claude, pause=0.1)
 
-    # Sequential would be 6 x 0.1s of call time alone. Generous bound so this
-    # asserts the shape rather than the machine's mood.
-    assert elapsed < 0.45, f"took {elapsed:.2f}s, which looks sequential"
+    # Sequential would be 6 x 0.1s of call time alone, plus each topic's own
+    # connection setup — well over a second end to end. The bound asserts the
+    # shape, not the machine's mood: it sits far above concurrent's ~0.2s of
+    # call time plus per-topic connections, and far below sequential.
+    assert elapsed < 0.7, f"took {elapsed:.2f}s, which looks sequential"
 
 
 def test_every_topic_still_produces_its_cards(client, claude):

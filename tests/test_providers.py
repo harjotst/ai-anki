@@ -12,10 +12,15 @@ from app import providers
 from app.providers import Capabilities, Prices, Reply, Usage
 from app.providers.anthropic_provider import AnthropicProvider
 from app.providers.gemini_provider import GeminiProvider
+from app.providers.openai_provider import OpenAIProvider
 
 
 def test_both_providers_satisfy_the_same_interface():
-    for provider in (AnthropicProvider(object()), GeminiProvider(object())):
+    for provider in (
+        AnthropicProvider(object()),
+        GeminiProvider(object()),
+        OpenAIProvider(object()),
+    ):
         assert isinstance(provider, providers.Provider)
         assert provider.prices.verified_on, "a rate with no verification date is a guess"
 
@@ -25,6 +30,8 @@ def test_an_unpriced_model_is_refused_rather_than_billed_at_a_guess(the_model="m
         AnthropicProvider(object(), model=the_model)
     with pytest.raises(ValueError, match="unpriced"):
         GeminiProvider(object(), model=the_model)
+    with pytest.raises(ValueError, match="unpriced"):
+        OpenAIProvider(object(), model=the_model)
 
 
 def test_an_unknown_provider_is_refused_rather_than_defaulted():
@@ -154,6 +161,10 @@ def test_every_provider_puts_documents_first_and_the_instruction_last():
     assert gemini_parts[0]["marker"] == 1
     assert gemini_parts[-1]["text"] == "INSTRUCTION"
 
+    openai_content = build(OpenAIProvider(object()))["input"][0]["content"]
+    assert openai_content[0]["marker"] == 1
+    assert openai_content[-1] == {"type": "input_text", "text": "INSTRUCTION"}
+
 
 def test_anthropic_marks_exactly_one_breakpoint_on_the_last_document():
     content = build(AnthropicProvider(object()))["messages"][0]["content"]
@@ -177,6 +188,35 @@ def test_asking_for_no_cache_marks_nothing_at_all():
 
     config = build(GeminiProvider(object()), cache=None)["config"]
     assert "cached_content_ttl_seconds" not in config
+
+    uncached = build(OpenAIProvider(object()), cache=None)
+    assert "prompt_cache_options" not in uncached
+    assert not any(
+        "prompt_cache_breakpoint" in block for block in uncached["input"][0]["content"]
+    )
+
+
+def test_openai_marks_exactly_one_explicit_breakpoint_on_the_last_document():
+    """Explicit rather than implicit, for the same reason Gemini's is: the
+    automatic kind is best-effort, and the cost model rests on the hits.
+    Verified against the versioned docs 2026-08-26: `prompt_cache_options`
+    with mode explicit, "30m" the only TTL GPT-5.6+ accepts."""
+    request = build(OpenAIProvider(object()))
+
+    assert request["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+    marked = [
+        b for b in request["input"][0]["content"] if "prompt_cache_breakpoint" in b
+    ]
+    assert len(marked) == 1
+    assert marked[0]["marker"] == 2
+
+
+def test_openai_asks_for_strict_schema_enforcement():
+    request = build(OpenAIProvider(object()))
+    fmt = request["text"]["format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["strict"] is True
+    assert fmt["schema"] == SCHEMA
 
 
 def test_gemini_asks_for_an_explicit_cache_rather_than_a_best_effort_one():
@@ -493,3 +533,120 @@ def test_fallbacks_goes_only_to_the_model_that_accepts_it(claude):
         system="s", documents=[], instruction="i", schema=schema, max_tokens=64
     ))
     assert "fallbacks" not in claude.requests[-1]
+
+
+# --- the OpenAI send path, against a scripted client ----------------------
+
+
+class _FakeOpenAI:
+    """Just enough client to hand `send` a canned Responses object."""
+
+    def __init__(self, response):
+        self.last_request = None
+        outer = self
+
+        class _Responses:
+            def create(self, **request):
+                outer.last_request = request
+                return response
+
+        self.responses = _Responses()
+
+
+def _luna_response(*, text='{"ok": true}', status="completed", reason=None,
+                   input_tokens=0, cached=0, written=0, output_tokens=0):
+    from types import SimpleNamespace as NS
+
+    return NS(
+        status=status,
+        incomplete_details=NS(reason=reason),
+        output=[],
+        output_text=text,
+        usage=NS(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            input_tokens_details=NS(cached_tokens=cached, cache_write_tokens=written),
+        ),
+    )
+
+
+def test_openai_usage_is_derived_the_way_the_bill_is_split():
+    """OpenAI reports cached and written tokens INSIDE input_tokens; billing
+    them again at the plain rate would double-count exactly the tokens the
+    cache exists to discount."""
+    client = _FakeOpenAI(_luna_response(input_tokens=1000, cached=600, written=300, output_tokens=50))
+    reply = OpenAIProvider(client).send({"model": "gpt-5.6-luna"})
+
+    assert reply.usage.input_tokens == 100
+    assert reply.usage.cache_read_tokens == 600
+    assert reply.usage.cache_write_tokens == 300
+    assert reply.usage.output_tokens == 50
+
+
+def test_openai_truncation_is_unusable_rather_than_parsed():
+    client = _FakeOpenAI(_luna_response(status="incomplete", reason="max_output_tokens"))
+    with pytest.raises(providers.Unusable, match="max_output_tokens"):
+        OpenAIProvider(client).send({"model": "gpt-5.6-luna"})
+
+
+def test_openai_refusals_are_unusable_with_the_reason_kept():
+    from types import SimpleNamespace as NS
+
+    response = _luna_response()
+    response.output = [NS(content=[NS(type="refusal", refusal="declined")])]
+    client = _FakeOpenAI(response)
+    with pytest.raises(providers.Unusable, match="declined"):
+        OpenAIProvider(client).send({"model": "gpt-5.6-luna"})
+
+
+def test_openai_is_reachable_by_environment_like_every_other_vendor(monkeypatch):
+    monkeypatch.setenv("AI_ANKI_PROVIDER", "openai")
+    monkeypatch.setenv("AI_ANKI_MODEL", "gpt-5.6-luna")
+
+    provider = providers.build(client=object())
+
+    assert provider.name == "openai"
+    assert provider.model == "gpt-5.6-luna"
+    assert not providers.check_usable(provider), "Luna must pass the capability gate"
+
+
+def test_a_file_handle_from_one_vendor_is_never_sent_to_another(pg_dsn, tmp_path):
+    """Vendor file ids mean nothing across vendors. A job planned on one and
+    generated on another must re-upload, not hand OpenAI an Anthropic id —
+    which is exactly what a provider switch mid-job used to do."""
+    from app import db, jobs
+
+    class Vendor:
+        def __init__(self, name):
+            self.name = name
+            self.uploads = []
+
+        def upload(self, path, filename):
+            self.uploads.append(filename)
+            return f"{self.name}-handle"
+
+        def document_block(self, *, path, filename, handle):
+            return {"handle": handle}
+
+    db.initialise(pg_dsn)
+    conn = db.connect(pg_dsn)
+    try:
+        job_id = jobs.create_job(
+            conn, tmp_path, "notes.pdf", b"%PDF-1.4 stub", account_id=None
+        )
+
+        first = Vendor("anthropic")
+        jobs.documents_for(conn, job_id, first)
+        assert first.uploads == ["notes.pdf"]
+
+        second = Vendor("openai")
+        blocks = jobs.documents_for(conn, job_id, second)
+        assert second.uploads == ["notes.pdf"], "another vendor's handle was reused"
+        assert blocks == [{"handle": "openai-handle"}]
+
+        # Its own handle, though, IS remembered: at most one upload per vendor.
+        third = Vendor("openai")
+        jobs.documents_for(conn, job_id, third)
+        assert third.uploads == []
+    finally:
+        conn.close()

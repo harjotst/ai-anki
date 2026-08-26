@@ -148,9 +148,14 @@ def test_a_cached_run_costs_a_fraction_of_what_it_would_uncached(client, claude)
     actual = client.get(f"/api/jobs/{job_id}/usage").json()["total_cost_usd"]
 
     # Had each topic call paid full price for the same 200k document instead of
-    # reading it, the input alone would have been 2 x 200,000 @ $5/MTok = $2.00.
-    uncached_topic_input = 2 * 200_000 * ingestion.INPUT_PER_MTOK / 1_000_000
-    cached_topic_input = 2 * 200_000 * ingestion.CACHE_READ_MULTIPLIER * ingestion.INPUT_PER_MTOK / 1_000_000
+    # reading it, the input alone would have been 2 x 200,000 @ $2/MTok = $0.80.
+    # Priced off the provider's own sheet — the module-level constants this
+    # arithmetic used to lean on quoted a model the suite no longer runs.
+    from app.providers.anthropic_provider import MODELS
+
+    prices = MODELS["claude-sonnet-5"]
+    uncached_topic_input = 2 * 200_000 * prices.input / 1_000_000
+    cached_topic_input = 2 * 200_000 * prices.cache_read / 1_000_000
 
     assert cached_topic_input < uncached_topic_input / 5
     assert actual < uncached_topic_input + 2.5

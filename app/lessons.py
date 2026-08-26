@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 
-from app.planning import SYSTEM
+from app.planning import SYSTEM, detail_block
 
 # `\uXXXX`, and the whitespace escapes, left as literal characters in a string
 # that has already been through a JSON decoder.
@@ -193,7 +193,9 @@ LESSON_SCHEMA = {
 }
 
 
-def build_lesson_request(documents: list[dict], topic: dict, provider) -> dict:
+def build_lesson_request(
+    documents: list[dict], topic: dict, provider, detail_level: int | None = None
+) -> dict:
     """Assemble the request that teaches one topic."""
     claims = topic.get("claims") or []
     instruction = (
@@ -218,6 +220,7 @@ def build_lesson_request(documents: list[dict], topic: dict, provider) -> dict:
         "separately, and teaching the same point twice reaches the reader as a "
         "contradiction rather than as repetition."
         '\n\nScientific notation is notation: write it as inline math markup — $V_{max}$, $k_{cat}$, $K_m$, $Ca^{2+}$, $t_{1/2}$, $10^{-9}$ M — dollar-delimited with LaTeX-style _{} and ^{} and nothing more (no other LaTeX commands beyond Greek letters like \\alpha and arrows like \\rightarrow). Plain-text spellings such as Vmax or Ca2+ are wrong.'
+        + detail_block(detail_level)
         + (
             "\n\nThis topic owns these points and only these:\n"
             + "\n".join(f"- {claim}" for claim in claims)

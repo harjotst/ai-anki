@@ -4,12 +4,13 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useGoBack } from "../../../lib/nav";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { dropCache } from "../../../lib/data";
+import { notify } from "../../../lib/notify";
 import { api } from "../../../lib/session";
 import { radius, space, target, usePalette } from "../../../theme";
-import { Button, Cap, CardBox, ErrorCard, IconBtn, Seg, Skeleton, T } from "../../../ui";
+import { Button, Cap, CardBox, ErrorCard, Icon, IconBtn, Seg, Skeleton, T } from "../../../ui";
 
 export default function JobRun() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -53,6 +54,23 @@ export default function JobRun() {
   useEffect(() => {
     if (job?.state === "complete") router.replace(`/lessons/${jobId}`);
   }, [job, jobId, router]);
+
+  // The banner for the pocket: fired only on a transition this screen
+  // actually observed, so reopening the app onto old news announces nothing.
+  const lastState = useRef<string | null>(null);
+  useEffect(() => {
+    if (!job) return;
+    const before = lastState.current;
+    lastState.current = job.state;
+    if (!before || before === job.state) return;
+    const name = job.deck_name || job.source_filename || "Your upload";
+    if (job.state === "plan_ready")
+      notify("Plan ready", `${name}: review the topics and approve.`);
+    if (job.state === "complete")
+      notify("Deck ready", `${name}: every lesson and card is written.`);
+    if (job.state === "failed")
+      notify("Upload hit a problem", `${name}: open the app to retry.`);
+  }, [job]);
 
   // A failure before anything has loaded owns the screen. Once content is
   // up, a failed background poll must NOT unmount it — plan edits live
@@ -381,14 +399,15 @@ function PlanReview({ job, onApproved, notice }: {
 
 function Generating({ job, notice }: { job: any; notice?: React.ReactNode }) {
   const router = useRouter();
+  const palette = usePalette();
   const [topics, setTopics] = useState<any[]>([]);
-  const [lessonCount, setLessonCount] = useState(0);
+  const [taught, setTaught] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const tick = () => {
       api(`/api/jobs/${job.job_id}/topics`).then((body) => setTopics(body.topics)).catch(() => {});
       api(`/api/jobs/${job.job_id}/lessons`)
-        .then((body) => setLessonCount(body.lessons.length))
+        .then((body) => setTaught(new Set(body.lessons.map((l: any) => l.topic_id))))
         .catch(() => {});
     };
     tick();
@@ -396,22 +415,76 @@ function Generating({ job, notice }: { job: any; notice?: React.ReactNode }) {
     return () => clearInterval(timer);
   }, [job.job_id]);
 
+  // A topic is two paid steps — its lesson, then its cards — so the bar
+  // moves twice per topic instead of holding still for minutes.
+  const steps = topics.reduce(
+    (sum, t) => sum + (t.status === "done" ? 2 : taught.has(t.topic_id) ? 1 : 0),
+    0
+  );
   const done = topics.filter((t) => t.status === "done").length;
-  const current = topics.find((t) => t.status === "running");
+  const cards = topics.reduce((sum, t) => sum + (t.card_count || 0), 0);
+
+  const stateOf = (t: any) =>
+    t.status === "done" ? "done"
+    : t.status === "failed" ? "failed"
+    : t.status === "running" ? (taught.has(t.topic_id) ? "cards" : "lesson")
+    : "queued";
+
+  const WORDS: Record<string, string> = {
+    done: "", failed: "failed — will retry",
+    cards: "writing cards…", lesson: "writing the lesson…", queued: "queued",
+  };
 
   return (
     <Frame title={job.deck_name || job.source_filename} caption="writing lessons and cards" notice={notice}>
       <CardBox style={{ padding: 20, gap: space[2] }}>
-        <Hairline fraction={topics.length ? done / topics.length : 0.08} />
+        <Hairline fraction={topics.length ? steps / (topics.length * 2) : 0.04} />
         <T v="secondary" style={{ fontVariant: ["tabular-nums"] }}>
-          {done} of {topics.length || "…"} topics
-          {current ? ` · writing ${current.path.split("::").pop()}` : ""}
+          {done} of {topics.length || "…"} topics done
+          {cards ? ` · ${cards} cards written` : ""}
         </T>
-        <Cap>You can leave — this keeps running.</Cap>
+        <Cap>You can leave — this keeps running, and lessons open as they land.</Cap>
       </CardBox>
-      <Button title={lessonCount > 0 ? `Read lessons (${lessonCount} ready)` : "The first lesson is being written…"}
-        disabled={lessonCount === 0}
-        onPress={() => router.push(`/lessons/${job.job_id}`)} />
+
+      <View style={{ gap: space[1] }}>
+        {topics.map((topic) => {
+          const phase = stateOf(topic);
+          const open = taught.has(topic.topic_id);
+          return (
+            <Pressable
+              key={topic.topic_id}
+              disabled={!open}
+              onPress={() => router.push(`/lessons/${job.job_id}`)}
+              style={({ pressed }) => ({
+                flexDirection: "row", alignItems: "center", gap: space[2],
+                minHeight: target.min, paddingHorizontal: 14,
+                borderWidth: 1, borderColor: palette.border, borderRadius: radius.md,
+                backgroundColor: pressed ? palette.sunken : palette.surface,
+                opacity: phase === "queued" ? 0.55 : 1,
+              })}
+            >
+              <View style={{ width: 22, alignItems: "center" }}>
+                {phase === "done" ? <Icon name="check" size={18} color={palette.accent} />
+                  : phase === "failed" ? <Icon name="x" size={16} color={palette.muted} />
+                  : phase === "queued" ? <Cap>·</Cap>
+                  : <ActivityIndicator size="small" color={palette.accent} />}
+              </View>
+              <View style={{ flex: 1, paddingVertical: 10 }}>
+                <T v="body" numberOfLines={1} style={{ fontWeight: "600" }}>
+                  {topic.path.split("::").pop()}
+                </T>
+                {phase === "done" ? (
+                  <Cap>{topic.card_count} cards{open ? " · lesson ready" : ""}</Cap>
+                ) : (
+                  <Cap>{WORDS[phase]}</Cap>
+                )}
+              </View>
+              {open && <Icon name="chevD" size={14} color={palette.muted} />}
+            </Pressable>
+          );
+        })}
+      </View>
+
       <Button title="Review the cards written so far" kind="ghost"
         onPress={() => router.push(`/job/${job.job_id}/cards`)} />
     </Frame>

@@ -9,6 +9,10 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "python-multipart>=0.0.20",
     "anthropic>=0.40",
+    "openai>=3.3",
+    # OpenAI has no token-counting endpoint; the admission gate counts text
+    # locally with the o200k tokenizer family and estimates documents by page.
+    "tiktoken>=0.14",
     # Pinned exactly: genanki is semi-dormant (last release 2023-11-12) and we
     # work around a known defect in this version rather than waiting on a fix.
     # See docs/verification.md.

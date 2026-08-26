@@ -5,12 +5,29 @@ import * as DocumentPicker from "expo-document-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useGoBack } from "../../lib/nav";
 import React, { useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cached, dropCache } from "../../lib/data";
+import { askOnce } from "../../lib/notify";
 import { api, uploadFile } from "../../lib/session";
 import { radius, space, target, usePalette } from "../../theme";
-import { Button, Cap, ErrorCard, Icon, IconBtn, Sheet, T } from "../../ui";
+import { Button, Cap, ErrorCard, Icon, IconBtn, Seg, Sheet, T } from "../../ui";
+
+// The five-point depth scale, mirrored from the server's DETAIL_LEVELS. 3 is
+// the model's own judgment of the material and sends nothing at all.
+const DETAIL_WORDS: Record<string, string> = {
+  "1": "Essentials only — the few facts you must know.",
+  "2": "Light — main mechanisms and key facts.",
+  "3": "Balanced — judged from the material itself.",
+  "4": "Deep — details, exceptions, relationships.",
+  "5": "Exhaustive — everything the material commits to.",
+};
+
+// The picker's cache copy is named by UUID; the asset's own name is the one
+// the user picked. Cleaned the same way the server cleans it, for the
+// deck-name placeholder only — the server remains the authority.
+const cleanName = (filename?: string | null) =>
+  (filename || "").replace(/\.[^.]+$/, "").replace(/[_\s]+/g, " ").trim();
 
 export default function NewJob() {
   const router = useRouter();
@@ -22,6 +39,9 @@ export default function NewJob() {
   const [decks, setDecks] = useState<any[]>([]);
   const [deckId, setDeckId] = useState(typeof deck === "string" ? deck : "");
   const [files, setFiles] = useState<DocumentPicker.DocumentPickerAsset[]>([]);
+  const [deckName, setDeckName] = useState("");
+  const [detail, setDetail] = useState("3");
+  const [guidance, setGuidance] = useState("");
   const [choosing, setChoosing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +74,9 @@ export default function NewJob() {
     if (!files.length) return;
     setBusy(true);
     setError(null);
+    // The permission dialog lands at the moment its purpose is obvious:
+    // we are about to have something worth announcing.
+    askOnce();
     try {
       // POST /api/jobs takes exactly one file, so each picked file becomes
       // its own job — all into the same deck: the first upload founds it
@@ -63,9 +86,17 @@ export default function NewJob() {
       for (const file of files) {
         let jobId = created.current.get(file.uri);
         if (!jobId) {
+          // The cache copy's basename is a UUID; the asset's name is the
+          // file the user picked, and it is what names the deck.
+          const parameters: Record<string, string> = {};
+          if (file.name) parameters.filename = file.name;
+          if (targetDeck) parameters.deck_id = targetDeck;
+          else if (deckName.trim()) parameters.deck_name = deckName.trim();
+          if (guidance.trim()) parameters.guidance = guidance.trim();
+          if (detail !== "3") parameters.detail_level = detail;
           const { job_id } = await uploadFile("/api/jobs", file.uri, {
             mimeType: file.mimeType || "application/octet-stream",
-            parameters: targetDeck ? { deck_id: targetDeck } : undefined,
+            parameters,
           });
           jobId = job_id as string;
           created.current.set(file.uri, jobId);
@@ -136,6 +167,15 @@ export default function NewJob() {
               rather than arriving alongside them.
             </Cap>
           )}
+          {deckId === "" && (
+            <TextInput
+              value={deckName}
+              onChangeText={setDeckName}
+              placeholder={cleanName(files[0]?.name) || "Deck name (from the file if blank)"}
+              placeholderTextColor={palette.muted}
+              style={[fieldRow, { color: palette.text, fontSize: 16, fontWeight: "600", paddingVertical: 12 }]}
+            />
+          )}
         </View>
 
         <Pressable
@@ -167,6 +207,31 @@ export default function NewJob() {
               onPress={() => setFiles((current) => current.filter((f) => f.uri !== file.uri))} />
           </View>
         ))}
+
+        <View style={{ gap: space[1] }}>
+          <Cap style={{ paddingLeft: 2 }}>How deep</Cap>
+          <Seg
+            options={[["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["5", "5"]]}
+            value={detail}
+            onChange={setDetail}
+          />
+          <Cap>{DETAIL_WORDS[detail]}</Cap>
+        </View>
+
+        <View style={{ gap: space[1] }}>
+          <Cap style={{ paddingLeft: 2 }}>Anything to focus on or skip?</Cap>
+          <TextInput
+            value={guidance}
+            onChangeText={setGuidance}
+            placeholder={"Optional — e.g. focus on the hormones,\nskip the history section"}
+            placeholderTextColor={palette.muted}
+            multiline
+            style={[fieldRow, {
+              color: palette.text, fontSize: 15, minHeight: 72,
+              paddingVertical: 12, textAlignVertical: "top",
+            }]}
+          />
+        </View>
 
         {error && <ErrorCard message={error} onRetry={send} />}
         <Button title={busy ? "Uploading…" : "Upload & plan"} onPress={send}

@@ -9,7 +9,7 @@ and every call would pay full price.
 
 from __future__ import annotations
 
-from app.planning import NOTE_TYPES, SYSTEM
+from app.planning import NOTE_TYPES, SYSTEM, detail_block
 
 CARDS_SCHEMA = {
     "type": "object",
@@ -124,6 +124,7 @@ def build_cards_request(
     provider,
     existing: list[dict] | None = None,
     siblings: list[dict] | None = None,
+    detail_level: int | None = None,
 ) -> dict:
     difficulty = str(topic.get("difficulty", "medium")).lower()
     instruction = (
@@ -145,6 +146,7 @@ def build_cards_request(
             if topic.get("claims")
             else ""
         )
+        + detail_block(detail_level)
         + siblings_block(siblings or [])
         + existing_cards_block(existing or [])
     )

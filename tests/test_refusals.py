@@ -29,11 +29,15 @@ def test_a_truncated_response_fails_the_job_rather_than_parsing_half_the_json(cl
     assert "max_tokens" in job["error"]
 
 
-def test_requests_opt_into_a_server_side_fallback_so_a_refusal_can_be_rescued(client, claude):
+def test_the_fallback_opt_in_is_no_longer_sent_where_it_would_be_refused(client, claude):
+    """Sonnet 5 rejects the `fallbacks` parameter outright — the whole request
+    400s (observed live 2026-08-26), which is a far worse outcome than the
+    occasional unrescued refusal the opt-in existed to soften. Opus still
+    opts in; test_providers pins both directions.
+    """
     claude.replies_json(PLAN)
     job_id = upload(client)
 
     client.post(f"/api/jobs/{job_id}/plan")
 
-    sent = claude.requests[0]
-    assert sent["fallbacks"] == "default"
+    assert "fallbacks" not in claude.requests[0]

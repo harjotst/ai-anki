@@ -169,10 +169,21 @@ def create_app(
     def create_job(
         file: UploadFile,
         deck_id: str | None = Form(default=None),
+        # The file part's own name is not trusted to be the real one: the
+        # phone's document picker uploads its cache copy, whose basename is a
+        # UUID. The client sends the name the user actually picked.
+        filename: str | None = Form(default=None),
+        deck_name: str | None = Form(default=None),
+        guidance: str | None = Form(default=None),
+        detail_level: int | None = Form(default=None),
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
     ):
         """Start a Job. Naming a Deck continues it; naming none begins one."""
+        if detail_level is not None and not 1 <= detail_level <= 5:
+            raise HTTPException(
+                status_code=422, detail="detail_level runs from 1 to 5"
+            )
         if deck_id:
             if not ledger.deck_exists(conn, deck_id, account.id):
                 raise HTTPException(status_code=404, detail="no such deck")
@@ -187,10 +198,13 @@ def create_app(
         job_id = jobs.create_job(
             conn,
             data_dir,
-            file.filename or "upload",
+            (filename or "").strip() or file.filename or "upload",
             content,
             account_id=account.id,
             deck_id=deck_id,
+            deck_name=deck_name,
+            guidance=guidance,
+            detail_level=detail_level,
         )
         return JSONResponse({"job_id": job_id}, status_code=201)
 
@@ -204,7 +218,11 @@ def create_app(
         job = job or jobs.load_job(conn, job_id)
         existing = ledger.deck_topics(conn, job.deck_id) if job and job.deck_id else []
         return planning.build_plan_request(
-            jobs.documents_for(conn, job_id, provider), provider, existing
+            jobs.documents_for(conn, job_id, provider),
+            provider,
+            existing,
+            guidance=job.guidance if job else None,
+            detail_level=job.detail_level if job else None,
         )
 
     @app.get("/api/jobs")
@@ -255,6 +273,8 @@ def create_app(
             "attempt_count": job.attempt_count,
             "source_filename": job.source_filenames[0] if job.source_filenames else None,
             "source_filenames": job.source_filenames,
+            "guidance": job.guidance,
+            "detail_level": job.detail_level,
         }
 
     @app.get("/api/jobs/{job_id}/topics")
@@ -463,7 +483,9 @@ def create_app(
             "topics": topics,
             "token_ceiling": ingestion.TOKEN_CEILING,
             "within_limit": input_tokens <= ingestion.TOKEN_CEILING,
-            "estimated_cost_usd": ingestion.estimate_cost(input_tokens, topics=topics),
+            "estimated_cost_usd": ingestion.estimate_cost(
+                input_tokens, topics=topics, prices=provider.prices
+            ),
         }
 
     @app.put("/api/jobs/{job_id}/plan")

@@ -331,6 +331,13 @@ CREATE INDEX IF NOT EXISTS job_event_job_idx ON job_event(job_id, id);
 -- only shape a fresh database; a deployed one needs the same end state.
 ALTER TABLE account ADD COLUMN IF NOT EXISTS username TEXT;
 
+-- What the user told us at upload, kept on the job because every pass reads
+-- it: free-text focus/skip instructions, and how deep to go (1 bare to 5
+-- exhaustive; NULL means level 3, the model's own judgment, and adds nothing
+-- to any prompt).
+ALTER TABLE job ADD COLUMN IF NOT EXISTS guidance TEXT;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS detail_level INTEGER;
+
 -- Unique case-insensitively: @Harjot and @harjot are one person or a scam.
 CREATE UNIQUE INDEX IF NOT EXISTS account_username_idx ON account(lower(username));
 """

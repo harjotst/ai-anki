@@ -96,6 +96,57 @@ PLAN_INSTRUCTION = (
 )
 
 
+# How deep the user asked this deck to go, on a five-point scale. Level 3 —
+# and an unset level — adds NOTHING: the model's own judgment of the material
+# is the default, and these blocks exist to bend it deliberately in either
+# direction, not to restate it. One vocabulary for all three passes, so the
+# plan's granularity and the cards' depth move together.
+DETAIL_LEVELS = {
+    1: (
+        "Depth 1 of 5 — essentials only. Keep only what the material treats as "
+        "central; drop supporting detail, worked examples and edge cases. "
+        "Propose few topics and small card counts."
+    ),
+    2: (
+        "Depth 2 of 5 — light. Prefer the main mechanisms and their key facts; "
+        "leave out most supporting detail. Keep card counts modest."
+    ),
+    3: "",
+    4: (
+        "Depth 4 of 5 — thorough. Include supporting details, exceptions and "
+        "the relationships between mechanisms, not just the headlines. Card "
+        "counts may run generous where the material carries them."
+    ),
+    5: (
+        "Depth 5 of 5 — exhaustive. Everything the material commits to is fair "
+        "game: numbers, exceptions, named regulators, edge cases. Propose as "
+        "many cards as the material genuinely supports — but still never pad."
+    ),
+}
+
+
+def detail_block(detail_level: int | None) -> str:
+    text = DETAIL_LEVELS.get(detail_level or 3, "")
+    return f"\n\n{text}" if text else ""
+
+
+def guidance_block(guidance: str | None) -> str:
+    """What the user themselves asked for, passed through to the planner.
+
+    Their deck, their call: material they asked to focus on earns topics and
+    cards; material they asked to skip gets none, however substantial it looks.
+    """
+    if not (guidance or "").strip():
+        return ""
+    return (
+        "\n\nTHE USER'S OWN INSTRUCTIONS for this deck:\n"
+        f"{guidance.strip()}\n\n"
+        "Honour them when choosing topics and card counts: what they asked to "
+        "focus on earns more; what they asked to skip gets nothing, however "
+        "substantial it looks in the material."
+    )
+
+
 def text_document(text: str, filename: str) -> dict:
     return {
         "type": "document",
@@ -131,7 +182,13 @@ def existing_topics_block(existing: list[dict]) -> str:
     )
 
 
-def build_plan_request(documents: list[dict], provider, existing_topics=None) -> dict:
+def build_plan_request(
+    documents: list[dict],
+    provider,
+    existing_topics=None,
+    guidance: str | None = None,
+    detail_level: int | None = None,
+) -> dict:
     """Assemble the pass-1 request.
 
     Deliberately NOT cached. Measured against the live API: a request carrying
@@ -143,7 +200,10 @@ def build_plan_request(documents: list[dict], provider, existing_topics=None) ->
     return provider.build_request(
         system=SYSTEM,
         documents=documents,
-        instruction=PLAN_INSTRUCTION + existing_topics_block(existing_topics or []),
+        instruction=PLAN_INSTRUCTION
+        + detail_block(detail_level)
+        + guidance_block(guidance)
+        + existing_topics_block(existing_topics or []),
         schema=DECK_PLAN_SCHEMA,
         max_tokens=16000,
         cache=None,

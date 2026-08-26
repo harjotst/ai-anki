@@ -24,14 +24,6 @@ INLINE_LIMIT_BYTES = 256 * 1024
 
 FILES_BETA = "files-api-2025-04-14"
 
-# Hardcoded rather than fetched: a price that silently changes underneath a
-# budget check is worse than one that is visibly stale. claude-opus-5, USD per
-# million tokens.
-INPUT_PER_MTOK = 5.00
-OUTPUT_PER_MTOK = 25.00
-CACHE_WRITE_MULTIPLIER = 2.0  # 1-hour TTL
-CACHE_READ_MULTIPLIER = 0.1
-
 # What an estimate assumes before a plan exists to count.
 ASSUMED_TOPICS = 8
 ASSUMED_OUTPUT_TOKENS = 15_000
@@ -222,6 +214,7 @@ def estimate_cost(
     *,
     topics: int = ASSUMED_TOPICS,
     passes_per_topic: int = PASSES_PER_TOPIC,
+    prices=None,
 ) -> float:
     """What a job of this size is expected to cost, end to end.
 
@@ -230,8 +223,16 @@ def estimate_cost(
     with itself — at full price, a topic fan-out would cost more than the plan
     did — and the reason the write is counted per pass rather than once: two
     schemas cannot share one cache entry.
+
+    Priced from the provider that will actually run the job. The old hardcoded
+    rates outlived two model switches and quoted Opus money for Sonnet work.
     """
-    per_pass_write = input_tokens * CACHE_WRITE_MULTIPLIER * INPUT_PER_MTOK / 1_000_000
-    per_pass_reads = topics * input_tokens * CACHE_READ_MULTIPLIER * INPUT_PER_MTOK / 1_000_000
-    output = passes_per_topic * ASSUMED_OUTPUT_TOKENS * OUTPUT_PER_MTOK / 1_000_000
+    if prices is None:
+        from app.providers.anthropic_provider import MODELS
+
+        prices = MODELS["claude-sonnet-5"]
+    per = 1_000_000
+    per_pass_write = input_tokens * prices.cache_write / per
+    per_pass_reads = topics * input_tokens * prices.cache_read / per
+    output = passes_per_topic * ASSUMED_OUTPUT_TOKENS * prices.output / per
     return round(passes_per_topic * (per_pass_write + per_pass_reads) + output, 4)

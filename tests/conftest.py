@@ -411,6 +411,15 @@ class ClaudeScript:
         )
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_vendor(monkeypatch):
+    """The suite scripts an Anthropic transport; an operator's shell — where
+    AI_ANKI_PROVIDER may point at a different vendor entirely — must not be
+    able to point the scripted machine somewhere the script cannot answer."""
+    monkeypatch.delenv("AI_ANKI_PROVIDER", raising=False)
+    monkeypatch.delenv("AI_ANKI_MODEL", raising=False)
+
+
 @pytest.fixture
 def claude():
     return ClaudeScript()

@@ -133,13 +133,15 @@ class Worker:
             documents = await asyncio.to_thread(
                 jobs.documents_for, conn, job_id, self._provider
             )
+            job = await asyncio.to_thread(jobs.load_job, conn, job_id)
+            detail = job.detail_level if job else None
             pending = await asyncio.to_thread(jobs.unfinished_topics, conn, job_id)
             if not pending:
                 return await asyncio.to_thread(jobs.settle_job, conn, job_id)
 
             # The pacesetter writes the shared prefix.
             first, rest = pending[0], pending[1:]
-            if await self._one_topic(job_id, first, documents) is None:
+            if await self._one_topic(job_id, first, documents, detail) is None:
                 return jobs.INTERRUPTED
 
             if rest:
@@ -147,7 +149,7 @@ class Worker:
 
                 async def bounded(topic):
                     async with limit:
-                        return await self._one_topic(job_id, topic, documents)
+                        return await self._one_topic(job_id, topic, documents, detail)
 
                 results = await asyncio.gather(*(bounded(t) for t in rest))
                 if any(outcome is None for outcome in results):
@@ -157,7 +159,9 @@ class Worker:
         finally:
             await asyncio.to_thread(conn.close)
 
-    async def _one_topic(self, job_id: str, topic, documents) -> bool | None:
+    async def _one_topic(
+        self, job_id: str, topic, documents, detail_level: int | None = None
+    ) -> bool | None:
         """Teach one topic, then write its cards.
 
         The lesson comes first because that is the order the material has to be
@@ -183,7 +187,7 @@ class Worker:
 
             await asyncio.to_thread(jobs.start_topic, conn, job_id, topic.topic_id)
 
-            taught = await self._teach(conn, job_id, topic, documents)
+            taught = await self._teach(conn, job_id, topic, documents, detail_level)
             if taught is False:
                 return False
 
@@ -194,6 +198,7 @@ class Worker:
                     self._provider,
                     jobs.existing_cards_for_topic(conn, job_id, topic.topic_id),
                     jobs.sibling_topics(conn, job_id, topic.topic_id),
+                    detail_level=detail_level,
                 )
 
             request = await asyncio.to_thread(build_request)
@@ -222,14 +227,18 @@ class Worker:
         finally:
             await asyncio.to_thread(conn.close)
 
-    async def _teach(self, conn, job_id: str, topic, documents) -> bool:
+    async def _teach(
+        self, conn, job_id: str, topic, documents, detail_level: int | None = None
+    ) -> bool:
         """Write the lesson for one topic.
 
         A refused lesson fails the topic rather than being skipped. A topic that
         produced cards and no lesson would look complete on screen and be the
         one thing this application is for, missing.
         """
-        request = lessons.build_lesson_request(documents, topic.topic, self._provider)
+        request = lessons.build_lesson_request(
+            documents, topic.topic, self._provider, detail_level=detail_level
+        )
         try:
             result = await asyncio.to_thread(self._provider.send, request)
         except providers.Unusable as exc:

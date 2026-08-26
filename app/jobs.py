@@ -106,6 +106,9 @@ class Job:
     account_id: str | None = None
     attempt_count: int = 0
     deck_id: str | None = None
+    # The user's own upload-time instructions, read by every pass.
+    guidance: str | None = None
+    detail_level: int | None = None
 
 
 @dataclass(frozen=True)
@@ -209,6 +212,9 @@ def create_job(
     *,
     account_id: str,
     deck_id: str | None = None,
+    deck_name: str | None = None,
+    guidance: str | None = None,
+    detail_level: int | None = None,
 ) -> str:
     job_id = uuid.uuid4().hex
     stored_name = safe_filename(filename)
@@ -225,11 +231,16 @@ def create_job(
         # lineage; naming one continues the deck the user is already building.
         if deck_id is None:
             deck_id = ledger.create_deck(
-                conn, name=deck_name_from(filename), account_id=account_id
+                conn,
+                # The user's own name wins; the file's cleaned name is the
+                # default, never the storage name.
+                name=(deck_name or "").strip() or deck_name_from(filename),
+                account_id=account_id,
             )
         conn.execute(
-            "INSERT INTO job (id, account_id, deck_id, state) VALUES (%s, %s, %s, %s)",
-            (job_id, account_id, deck_id, UPLOADED),
+            "INSERT INTO job (id, account_id, deck_id, state, guidance, detail_level)"
+            " VALUES (%s, %s, %s, %s, %s, %s)",
+            (job_id, account_id, deck_id, UPLOADED, guidance, detail_level),
         )
         conn.execute(
             "INSERT INTO source (job_id, filename, stored_path, byte_size, position)"
@@ -242,7 +253,8 @@ def create_job(
 
 def load_job(conn: psycopg.Connection, job_id: str) -> Job | None:
     row = conn.execute(
-        "SELECT id, account_id, deck_id, state, error, plan_json, attempt_count"
+        "SELECT id, account_id, deck_id, state, error, plan_json, attempt_count,"
+        " guidance, detail_level"
         " FROM job WHERE id = %s",
         (job_id,),
     ).fetchone()
@@ -260,6 +272,8 @@ def load_job(conn: psycopg.Connection, job_id: str) -> Job | None:
         source_filenames=[s["filename"] for s in sources],
         account_id=row["account_id"],
         attempt_count=row["attempt_count"],
+        guidance=row["guidance"],
+        detail_level=row["detail_level"],
     )
 
 
@@ -632,7 +646,17 @@ def documents_for(conn: psycopg.Connection, job_id: str, provider) -> list[dict]
     most once per source, ever, and its id is committed before it is used.
     """
     sources = load_sources(conn, job_id)
-    known = {s.filename: s.file_id for s in sources if s.file_id}
+    # File handles are the VENDOR'S ids and mean nothing to any other vendor,
+    # so they are stored under the vendor's name and a handle from a different
+    # one is simply not a handle — the file re-uploads and the new id replaces
+    # it. Without this, switching providers sent Anthropic file ids to OpenAI
+    # and every call against them died.
+    tag = f"{provider.name}:"
+    known = {
+        s.filename: s.file_id[len(tag):]
+        for s in sources
+        if s.file_id and s.file_id.startswith(tag)
+    }
     converted = {s.filename: s.converted_path for s in sources if s.converted_path}
     before_ids, before_converted = dict(known), dict(converted)
 
@@ -642,7 +666,7 @@ def documents_for(conn: psycopg.Connection, job_id: str, provider) -> list[dict]
         if before_ids.get(filename) != file_id:
             conn.execute(
                 "UPDATE source SET file_id = %s WHERE job_id = %s AND filename = %s",
-                (file_id, job_id, filename),
+                (tag + file_id, job_id, filename),
             )
     for filename, path in converted.items():
         if before_converted.get(filename) != path:

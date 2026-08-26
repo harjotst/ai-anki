@@ -22,7 +22,7 @@ __all__ = [
     "check_usable", "build", "PROVIDERS",
 ]
 
-PROVIDERS = ("anthropic", "gemini")
+PROVIDERS = ("anthropic", "gemini", "openai")
 
 
 def build(name: str | None = None, model: str | None = None, client=None) -> Provider:
@@ -50,5 +50,14 @@ def build(name: str | None = None, model: str | None = None, client=None) -> Pro
 
             client = genai.Client()
         return GeminiProvider(client, model=model or "gemini-3.7-flash")
+
+    if name == "openai":
+        from app.providers.openai_provider import OpenAIProvider
+
+        if client is None:  # pragma: no cover - exercised only with the real SDK
+            import openai
+
+            client = openai.OpenAI()
+        return OpenAIProvider(client, model=model or "gpt-5.6-luna")
 
     raise ValueError(f"unknown provider {name!r}; expected one of {', '.join(PROVIDERS)}")
