@@ -151,11 +151,11 @@ class Guard:
         await self.app(scope, receive, send)
 
     def _resolve_account(self, claims) -> identity.Account:
-        conn = db.connect(self._database_url)
-        try:
+        # Borrowed, not opened: this runs on every request, and a fresh TLS
+        # handshake each time is the connection churn the hosted database
+        # throttled (observed 2026-08-26).
+        with db.borrowed(self._database_url) as conn:
             return identity.account_for(conn, claims)
-        finally:
-            conn.close()
 
     async def _refuse(self, status: int, detail: str, scope, receive, send) -> None:
         await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)

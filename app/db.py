@@ -377,6 +377,75 @@ def connect(url: str | None = None) -> psycopg.Connection:
     return conn
 
 
+# --- the pool -------------------------------------------------------------
+#
+# Opening a fresh TLS connection per request was tolerable against a local
+# SQLite file and became the failure itself against a hosted database: the
+# app's request path opened two per call (the guard's and the handler's), a
+# live run adds six more, and the burst of new connections is what Supabase's
+# direct endpoint throttles first — observed 2026-08-26 as a storm of
+# ConnectionTimeout while established connections kept working fine. A pool
+# holds a few warm connections and hands them out; nothing on the request
+# path performs a TLS handshake any more.
+
+_pools: dict[str, object] = {}
+
+
+def pool(url: str | None = None):
+    """The process-wide pool for `url`, created on first use."""
+    from psycopg_pool import ConnectionPool
+
+    key = url or dsn()
+    existing = _pools.get(key)
+    if existing is not None:
+        return existing
+
+    def _configure(conn: psycopg.Connection) -> None:
+        conn.row_factory = dict_row
+        conn.autocommit = True
+        conn.execute("SET statement_timeout TO 30000")
+
+    created = ConnectionPool(
+        key,
+        # Grown on demand and shrunk when idle: the test suite boots hundreds
+        # of machines and an eager minimum would open connections none of
+        # them use.
+        min_size=0,
+        max_size=12,
+        max_idle=60,
+        open=True,
+        configure=_configure,
+        kwargs={
+            "connect_timeout": 10,
+            "keepalives": 1,
+            "keepalives_idle": 10,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+        },
+    )
+    _pools[key] = created
+    return created
+
+
+def close_pool(url: str | None = None) -> None:
+    """Shut the pool for `url`, if one was ever created.
+
+    Called from application shutdown. The test suite runs hundreds of
+    machines against hundreds of throwaway schemas; a pool that outlived its
+    machine would hold connections to a schema that no longer exists.
+    """
+    existing = _pools.pop(url or dsn(), None)
+    if existing is not None:
+        existing.close()
+
+
+@contextmanager
+def borrowed(url: str | None = None):
+    """A pooled connection, back in the pool when the block ends."""
+    with pool(url).connection() as conn:
+        yield conn
+
+
 @contextmanager
 def transaction(conn: psycopg.Connection):
     """Run a unit of work atomically.

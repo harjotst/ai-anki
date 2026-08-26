@@ -84,34 +84,35 @@ async def stream(
     outlives the handler that created it, and the worker is writing on a handle
     of its own the whole time.
     """
-    # Connected and read on threads: this generator lives on the event loop
-    # for minutes, and a database read stuck on a dead socket here would take
-    # every other request down with it.
-    conn = await asyncio.to_thread(db.connect, database_url)
+    # Read on threads: this generator lives on the event loop for minutes,
+    # and a database read stuck on a dead socket here would take every other
+    # request down with it. Each poll borrows from the pool for milliseconds
+    # rather than holding a connection for the stream's whole life.
+    def snapshot(after: int):
+        with db.borrowed(database_url) as conn:
+            return _snapshot(conn, job_id, after)
+
     deadline = time.monotonic() + max_seconds
     last_id = after_id
     last_frame_at = time.monotonic()
-    try:
-        while True:
-            state, events = await asyncio.to_thread(_snapshot, conn, job_id, last_id)
-            for event in events:
-                yield frame(event.kind, event.data, id=event.id)
-                last_id = event.id
-                last_frame_at = time.monotonic()
+    while True:
+        state, events = await asyncio.to_thread(snapshot, last_id)
+        for event in events:
+            yield frame(event.kind, event.data, id=event.id)
+            last_id = event.id
+            last_frame_at = time.monotonic()
 
-            if state is None or state in FINISHED:
-                yield frame("end", {"state": state})
-                return
-            if time.monotonic() >= deadline:
-                return
-            if time.monotonic() - last_frame_at >= heartbeat_seconds:
-                yield ": heartbeat\n\n"
-                last_frame_at = time.monotonic()
-            if is_disconnected is not None and await is_disconnected():
-                return
-            await asyncio.sleep(POLL_SECONDS)
-    finally:
-        await asyncio.to_thread(conn.close)
+        if state is None or state in FINISHED:
+            yield frame("end", {"state": state})
+            return
+        if time.monotonic() >= deadline:
+            return
+        if time.monotonic() - last_frame_at >= heartbeat_seconds:
+            yield ": heartbeat\n\n"
+            last_frame_at = time.monotonic()
+        if is_disconnected is not None and await is_disconnected():
+            return
+        await asyncio.sleep(POLL_SECONDS)
 
 
 def _snapshot(conn, job_id: str, after_id: int):

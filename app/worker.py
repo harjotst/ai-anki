@@ -129,12 +129,9 @@ class Worker:
             return
 
         def checkpoint() -> None:
-            conn = db.connect(self._database_url)
-            try:
+            with db.borrowed(self._database_url) as conn:
                 for job_id in stranded:
                     jobs.interrupt_job(conn, job_id, "interrupted by a shutdown")
-            finally:
-                conn.close()
 
         await asyncio.to_thread(checkpoint)
         for job_id in stranded:
@@ -152,8 +149,10 @@ class Worker:
         """
         # Every database touch goes through a thread: this coroutine shares
         # the event loop with every request the server is answering, and a
-        # read stuck on a dead socket once froze all of them at once.
-        conn = await asyncio.to_thread(db.connect, self._database_url)
+        # read stuck on a dead socket once froze all of them at once. The
+        # connection is the pool's, held for the run and given back.
+        pool = db.pool(self._database_url)
+        conn = await asyncio.to_thread(pool.getconn)
         try:
             documents = await asyncio.to_thread(
                 jobs.documents_for, conn, job_id, self._provider
@@ -182,7 +181,7 @@ class Worker:
 
             return await asyncio.to_thread(jobs.settle_job, conn, job_id)
         finally:
-            await asyncio.to_thread(conn.close)
+            await asyncio.to_thread(pool.putconn, conn)
 
     async def _one_topic(
         self, job_id: str, topic, documents, detail_level: int | None = None
@@ -202,7 +201,8 @@ class Worker:
 
         None means a shutdown cut it short.
         """
-        conn = await asyncio.to_thread(db.connect, self._database_url)
+        pool = db.pool(self._database_url)
+        conn = await asyncio.to_thread(pool.getconn)
         try:
             if self._draining:
                 await asyncio.to_thread(
@@ -250,7 +250,7 @@ class Worker:
             await asyncio.to_thread(record)
             return True
         finally:
-            await asyncio.to_thread(conn.close)
+            await asyncio.to_thread(pool.putconn, conn)
 
     async def _teach(
         self, conn, job_id: str, topic, documents, detail_level: int | None = None

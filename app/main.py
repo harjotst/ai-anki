@@ -114,6 +114,7 @@ def create_app(
         # here. Everything the drain does is bounded, because the kill that
         # follows is not negotiable.
         await worker.drain()
+        db.close_pool(database_url)
 
     app = FastAPI(title="ai-anki", lifespan=lifespan)
     app.add_middleware(
@@ -125,14 +126,12 @@ def create_app(
 
     def get_conn():
         # Sync on purpose, like the handlers below: FastAPI resolves it on the
-        # threadpool, so connecting — a TLS round trip to a database across the
-        # internet — never runs on the event loop, where one dead socket once
-        # froze every request at once. psycopg connections may cross threads.
-        conn = db.connect(database_url)
-        try:
+        # threadpool, so database work never runs on the event loop, where one
+        # dead socket once froze every request at once. Borrowed from the
+        # pool, not opened: a fresh TLS handshake per request is what the
+        # hosted database's direct endpoint throttled first.
+        with db.borrowed(database_url) as conn:
             yield conn
-        finally:
-            conn.close()
 
     def guard_spend(conn, account_id):
         """Refuse work we already know we should not pay for."""
