@@ -1,12 +1,14 @@
 // Today: the only question a daily user has — what's due, and is the streak
 // safe. A native mirror of the web screen, fed by the same endpoints.
 import { type Href, useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cached, dueCounts, localDay, streakFrom } from "../../lib/data";
+import { deckStillForming, LIVE_STATES, useLiveJobs } from "../../lib/live-jobs";
 import { radius, space, target, usePalette } from "../../theme";
 import { Button, Cap, CardBox, ErrorCard, IconBtn, NavRow, Pill, Skeleton, T } from "../../ui";
+import { JobProgressCard } from "../../ui/job-progress";
 import { Mascot } from "../../ui/mascot";
 
 // The /job screens land in this same change set; the generated route types
@@ -120,6 +122,10 @@ export default function Today() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const insets = useSafeAreaInsets();
+  // The live pulse: fresh job states every few seconds while anything runs,
+  // and a bumped `pulse` whenever a state changed — the moment a plan turns
+  // ready this screen re-renders, without waiting for a refocus.
+  const { jobs: liveJobs, pulse } = useLiveJobs();
 
   const load = useCallback(async () => {
     setError(null);
@@ -147,6 +153,9 @@ export default function Today() {
   // the cache) or a job screen must show the new numbers without a reload.
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
+  // A job changed state while we watched: decks and counts are stale too.
+  useEffect(() => { if (pulse) load(); }, [pulse, load]);
+
   const body = () => {
     if (error) return <ErrorCard message={error} onRetry={load} />;
     if (!decks) return (
@@ -162,8 +171,19 @@ export default function Today() {
       .filter((d: any) => Date.now() - new Date(d.day).getTime() < 7 * 86_400_000)
       .reduce((sum: number, d: any) => sum + d.reviews, 0);
     const { streak } = streakFrom(activity?.days || []);
-    const firstRun = decks.length === 0;
-    const sorted = [...decks].sort((a, b) => (counts[b.deck_id] || 0) - (counts[a.deck_id] || 0));
+    // Live states beat the 30s cache the moment the poll has answered once.
+    const jobsNow = liveJobs ?? [...attention, ...Object.values(writing)];
+    const attentionNow = jobsNow.filter((job: any) => NEEDS_YOU[job.state]);
+    const buildingNow = jobsNow.filter((job: any) => LIVE_STATES.includes(job.state));
+    const openJobs = jobsNow.filter(
+      (job: any) => job.state !== "complete" && job.state !== "cancelled"
+    );
+    const firstRun = decks.length === 0 && openJobs.length === 0;
+    const sorted = [...decks]
+      // A deck still being made is the job's business: its card shows above,
+      // says what is happening, and opens the run — never an empty shell.
+      .filter((deck) => !deckStillForming(deck, jobsNow))
+      .sort((a, b) => (counts[b.deck_id] || 0) - (counts[a.deck_id] || 0));
 
     return (
       <>
@@ -215,26 +235,12 @@ export default function Today() {
           </CardBox>
         )}
 
-        {attention.map((job) => {
-          const note = NEEDS_YOU[job.state](job);
-          return (
-            <Pressable key={job.job_id}
-              onPress={() => router.push(`/job/${job.job_id}` as Href)}
-              style={{
-                flexDirection: "row", alignItems: "center", gap: space[3],
-                backgroundColor: palette.accentSoft, borderRadius: radius.md,
-                paddingHorizontal: 14, paddingVertical: 12, minHeight: target.min,
-              }}>
-              <View style={{ flex: 1 }}>
-                <T v="secondary" style={{ fontWeight: "600", color: palette.text }}>
-                  {job.deck_name || job.source_filename}
-                </T>
-                <Cap>{note.line}</Cap>
-              </View>
-              <T v="secondary" style={{ fontWeight: "600", color: palette.accent }}>{note.action}</T>
-            </Pressable>
-          );
-        })}
+        {attentionNow.map((job) => (
+          <JobProgressCard key={job.job_id} job={job} />
+        ))}
+        {buildingNow.map((job) => (
+          <JobProgressCard key={job.job_id} job={job} />
+        ))}
 
         {activity && activity.days?.length > 0 && (
           <CardBox style={{ gap: space[3] }}>

@@ -415,3 +415,20 @@ def test_reviews_record_whatever_the_database_calls_utc(client, claude, pg_dsn):
         admin = psycopg.connect(base, autocommit=True)
         admin.execute(f'ALTER DATABASE "{dbname}" RESET timezone')
         admin.close()
+
+
+def test_a_finished_deck_is_already_studiable_for_its_owner(client, claude):
+    """The screen after generation shows topics and cards, not an enrolment
+    gate. Observed live 2026-08-26: a 132-card deck read as "no cards yet"
+    because the deck screen reads the study projection and nothing had
+    enrolled the owner."""
+    claude.replies_json(PLAN)
+    job_id = upload(client)
+    client.post(f"/api/jobs/{job_id}/plan")
+    claude.answers(lesson=LESSON, cards=CELL_CARDS)
+    client.post(f"/api/jobs/{job_id}/generate")
+    deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
+
+    # No POST /study anywhere above: completion itself did the enrolling.
+    assert due(client, deck_id), "a completed deck should be studiable at once"
+    assert client.get(f"/api/decks/{deck_id}/mastery").json()["topics"]

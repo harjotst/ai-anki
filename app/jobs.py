@@ -288,7 +288,13 @@ def list_jobs(conn: psycopg.Connection, account_id: str | None) -> list[dict]:
         "SELECT j.id, j.state, j.error, j.created_at, j.deck_id, d.name AS deck_name,"
         "       (SELECT filename FROM source s WHERE s.job_id = j.id"
         "         ORDER BY s.position LIMIT 1) AS source_filename,"
-        "       (SELECT COUNT(*) FROM card c WHERE c.job_id = j.id) AS card_count"
+        "       (SELECT COUNT(*) FROM card c WHERE c.job_id = j.id) AS card_count,"
+        # Progress numbers ride along so the home screen can say "3 of 8
+        # topics" without a request per job — the list is polled while a run
+        # is live, and one poll must stay one query.
+        "       (SELECT COUNT(*) FROM topic t WHERE t.job_id = j.id) AS topics_total,"
+        "       (SELECT COUNT(*) FROM topic t WHERE t.job_id = j.id"
+        "         AND t.status = 'done') AS topics_done"
         "  FROM job j LEFT JOIN deck d ON d.id = j.deck_id"
         " WHERE j.account_id IS NOT DISTINCT FROM %s"
         " ORDER BY j.created_at DESC, j.id DESC",
@@ -304,6 +310,8 @@ def list_jobs(conn: psycopg.Connection, account_id: str | None) -> list[dict]:
             "deck_name": row["deck_name"],
             "source_filename": row["source_filename"],
             "card_count": row["card_count"],
+            "topics_total": row["topics_total"],
+            "topics_done": row["topics_done"],
         }
         for row in rows
     ]
@@ -973,4 +981,14 @@ def settle_job(conn: psycopg.Connection, job_id: str) -> str:
     with db.transaction(conn):
         transition(conn, job_id, COMPLETE, error=None)
         conn.execute("UPDATE job SET attempt_count = 0 WHERE id = %s", (job_id,))
+        # A finished deck is studiable the moment it is finished. The deck
+        # screen reads the study projection, so without this a 132-card deck
+        # read as "no cards yet" until a button nobody knew about was pressed
+        # (observed live 2026-08-26). Enrolment is idempotent and additive;
+        # recipients of a shared deck still choose for themselves.
+        job = load_job(conn, job_id)
+        if job and job.deck_id and job.account_id:
+            from app import study
+
+            study.enrol(conn, job.account_id, job.deck_id)
     return COMPLETE
