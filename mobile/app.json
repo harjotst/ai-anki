@@ -7,21 +7,10 @@
     "icon": "./assets/images/icon.png",
     "scheme": "aianki",
     "userInterfaceStyle": "automatic",
-    "ios": {
-      "bundleIdentifier": "com.harjotst.aianki",
-      "icon": "./assets/expo.icon",
-      "infoPlist": {
-        "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true,
-          "NSAllowsLocalNetworking": true
-        }
-      }
-    },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#E3EFEB",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
@@ -37,7 +26,11 @@
         {
           "backgroundColor": "#FAF9F7",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 150,
+          "dark": {
+            "backgroundColor": "#131311",
+            "image": "./assets/images/splash-icon.png"
+          }
         }
       ],
       "expo-sharing"
@@ -45,6 +38,9 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "ios": {
+      "supportsTablet": false
     }
   }
 }

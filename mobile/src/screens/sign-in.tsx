@@ -13,6 +13,7 @@ import {
 import { configured } from "../lib/supabase";
 import { radius, space, target, tokens, usePalette } from "../theme";
 import { Button, T } from "../ui";
+import { Mascot } from "../ui/mascot";
 
 function GoogleG({ size = 20 }: { size?: number }) {
   const brand = tokens.brand;
@@ -67,7 +68,8 @@ export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
       style={{ flex: 1, backgroundColor: palette.bg }}
       contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: space[4], gap: space[3] }}
     >
-      <T v="display">ai-anki</T>
+      <Mascot size={132} />
+      <T v="display" style={{ marginTop: 8 }}>ai-anki</T>
       <T v="secondary" style={{ marginBottom: space[3] }}>
         Study a little every day. Sign in and your decks, streak and friends
         are on every device you own.

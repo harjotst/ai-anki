@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cached, dueCounts, localDay, streakFrom } from "../../lib/data";
 import { radius, space, target, usePalette } from "../../theme";
 import { Button, Cap, CardBox, ErrorCard, IconBtn, NavRow, Pill, Skeleton, T } from "../../ui";
+import { Mascot } from "../../ui/mascot";
 
 // The /job screens land in this same change set; the generated route types
 // refresh only when the dev server runs, hence the Href casts below.
@@ -179,7 +180,8 @@ export default function Today() {
         </View>
 
         {firstRun ? (
-          <CardBox style={{ gap: space[3] }}>
+          <CardBox style={{ gap: space[3], alignItems: "center" }}>
+            <Mascot size={120} />
             <T v="heading">How this works</T>
             <T v="secondary">
               Upload a lecture → approve the plan → read the lessons → review
