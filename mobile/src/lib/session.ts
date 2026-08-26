@@ -3,6 +3,7 @@
 // server verifies either against published keys, so nothing here grants
 // anything — this module only decides which token to present.
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { File, UploadType } from "expo-file-system";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { configured, supabase } from "./supabase";
@@ -256,7 +257,6 @@ export async function uploadFile(
   fileUri: string,
   options: { mimeType?: string; parameters?: Record<string, string> } = {}
 ) {
-  const { File, UploadType } = await import("expo-file-system");
   const token = await accessToken();
   const result = await new File(fileUri).upload(`${BASE}${path}`, {
     uploadType: UploadType.MULTIPART,
