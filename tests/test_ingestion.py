@@ -66,7 +66,7 @@ def test_the_gate_counts_tokens_over_the_assembled_request_before_spending_anyth
 
     assert len(claude.count_requests) == 1
     counted = claude.count_requests[0]
-    assert counted["model"] == "claude-opus-5"
+    assert counted["model"] == "claude-sonnet-5"
 
     # Counted over the same CONTENT that will be sent, but not the same
     # transport. The token-counting endpoint refuses `file` sources outright —

@@ -40,7 +40,7 @@ def build(name: str | None = None, model: str | None = None, client=None) -> Pro
 
         from app.providers.anthropic_provider import AnthropicProvider
 
-        return AnthropicProvider(client or anthropic.Anthropic(), model=model or "claude-opus-5")
+        return AnthropicProvider(client or anthropic.Anthropic(), model=model or "claude-sonnet-5")
 
     if name == "gemini":
         from app.providers.gemini_provider import GeminiProvider

@@ -52,7 +52,7 @@ def test_the_plan_request_constrains_the_response_to_a_non_recursive_schema(clie
     client.post(f"/api/jobs/{job_id}/plan")
 
     sent = claude.requests[0]
-    assert sent["model"] == "claude-opus-5"
+    assert sent["model"] == "claude-sonnet-5"
 
     schema = sent["output_config"]["format"]["schema"]
     # Structured outputs reject recursive schemas outright, so the topic tree is

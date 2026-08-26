@@ -69,7 +69,7 @@ def estimate_document_tokens(path: Path | None) -> int:
 class AnthropicProvider:
     name = "anthropic"
 
-    def __init__(self, client, model: str = "claude-opus-5", effort: str = "high"):
+    def __init__(self, client, model: str = "claude-sonnet-5", effort: str = "high"):
         if model not in MODELS:
             raise ValueError(f"unpriced model {model!r}; add it to MODELS with a verified rate")
         self._client = client

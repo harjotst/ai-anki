@@ -102,9 +102,9 @@ def test_an_administrator_can_see_what_each_person_has_spent(boot, claude):
         spend = machine.get("/api/spend").json()
 
         person = next(row for row in spend["people"] if row["account_id"] == TESTER)
-        # 400,000 cache-write tokens at 2x $5/MTok is $4.00, worked out
-        # independently of the code.
-        assert person["cost_usd"] >= 4.00
+        # 400,000 cache-write tokens at 2x Sonnet's $2/MTok is $1.60, worked
+        # out independently of the code.
+        assert person["cost_usd"] >= 1.60
         assert person["person"], "a name to show, even if it is only the id"
 
 

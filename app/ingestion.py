@@ -198,7 +198,7 @@ def cost_of(call: dict, prices=None) -> float:
         # provider's card when a caller has not supplied one.
         from app.providers.anthropic_provider import MODELS
 
-        prices = MODELS["claude-opus-5"]
+        prices = MODELS["claude-sonnet-5"]
     per = 1_000_000
     return round(
         call["input_tokens"] * prices.input / per

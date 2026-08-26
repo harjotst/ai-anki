@@ -135,7 +135,9 @@ def test_the_job_reports_what_it_actually_cost_not_what_it_was_estimated_to(clie
     # The lesson line is small here only because the fake's stock usage is
     # small. On a real job it is the same order as the cards, which is the
     # number the estimate has to carry.
-    expected = 0.0025 + 2.0 + 0.05 + 2 * (0.002 + 0.1 + 0.025) + 2 * (0.0005 + 0.00125)
+    # Sonnet prices (2.00 / 10.00 / 4.00 / 0.20 per M) — the model the
+    # product actually runs.
+    expected = 0.001 + 0.8 + 0.02 + 2 * (0.0008 + 0.04 + 0.01) + 2 * (0.0002 + 0.0005)
     assert abs(usage["total_cost_usd"] - expected) < 0.0001
     assert usage["total_cost_usd"] > 0
 

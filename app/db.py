@@ -348,7 +348,7 @@ def connect(url: str | None = None) -> psycopg.Connection:
     explicitly when something must be atomic -- the same contract the SQLite
     module had, so `db.transaction` still means what it meant.
     """
-    return psycopg.connect(
+    conn = psycopg.connect(
         url or dsn(),
         autocommit=True,
         row_factory=dict_row,
@@ -358,12 +358,16 @@ def connect(url: str | None = None) -> psycopg.Connection:
         # Keepalives notice the corpse in ~30s and error, which the screens
         # know how to show; a hang, nobody can show.
         connect_timeout=10,
-        options="-c statement_timeout=30000",
         keepalives=1,
         keepalives_idle=10,
         keepalives_interval=10,
         keepalives_count=3,
     )
+    # As a session SET, not conninfo options= — that kwarg would silently
+    # replace any options already carried by the DSN (the test harness rides
+    # search_path there, and losing it sent every query to the wrong schema).
+    conn.execute("SET statement_timeout TO 30000")
+    return conn
 
 
 @contextmanager

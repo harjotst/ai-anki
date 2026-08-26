@@ -8,7 +8,7 @@ so a self-referencing topic node would be a 400.
 from __future__ import annotations
 
 
-MODEL = "claude-opus-5"
+MODEL = "claude-sonnet-5"
 
 DIFFICULTIES = ["easy", "medium", "hard"]
 NOTE_TYPES = ["basic", "cloze"]
