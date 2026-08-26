@@ -337,13 +337,14 @@ export function Sheet({ onClose, children }: { onClose: () => void; children: Re
   );
 }
 
-/** The one renderer for card text, same contract as the web's CardText. */
+/** The one renderer for card text, same contract as the web's CardText.
+ *  Through Sci, not a bare Text: the question side is where $K^{+}$ was
+ *  reaching a studying user as raw dollar-markup while every other card
+ *  surface rendered it. */
 export function CardText({ text, size = 18 }: { text: string; size?: number }) {
   const palette = usePalette();
   return (
-    <Text style={{ fontSize: size, lineHeight: size * 1.5, color: palette.text }}>
-      {text}
-    </Text>
+    <Sci text={text} style={{ fontSize: size, lineHeight: size * 1.5, color: palette.text }} />
   );
 }
 
