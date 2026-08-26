@@ -12,6 +12,8 @@ import json
 import mimetypes
 from pathlib import Path
 
+import anthropic
+
 from app.providers.base import Capabilities, Prices, Reply, Unusable, Usage
 
 FILES_BETA = "files-api-2025-04-14"
@@ -19,6 +21,12 @@ FILES_BETA = "files-api-2025-04-14"
 # same call. Study material in medicine and the life sciences sits close enough
 # to the safety classifiers that this is worth having on by default.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+# Which models accept the `fallbacks` parameter at all. Opus 5 accepts it
+# (verified live 2026-08-17); Sonnet 5 refuses the whole request with a 400 —
+# "'claude-sonnet-5' does not support the `fallbacks` parameter" (verified live
+# 2026-08-26, req_011CeQfD9jcBcLEpdiDRjox7, a planning run it took down).
+FALLBACK_MODELS = frozenset({"claude-opus-5"})
 
 # Anything at or above this is uploaded rather than inlined: a request is capped
 # at 32MB whatever the context window allows.
@@ -199,9 +207,20 @@ class AnthropicProvider:
         return rebuilt, estimated
 
     def send(self, request: dict) -> Reply:
-        response = self._client.beta.messages.create(
-            **request, betas=[FALLBACK_BETA, FILES_BETA], fallbacks="default"
-        )
+        betas = [FILES_BETA]
+        extra: dict = {}
+        if self.model in FALLBACK_MODELS:
+            betas.insert(0, FALLBACK_BETA)
+            extra["fallbacks"] = "default"
+        try:
+            response = self._client.beta.messages.create(
+                **request, betas=betas, **extra
+            )
+        except anthropic.APIError as exc:
+            # The SDK has already retried whatever was worth retrying. Raised
+            # raw, this strands the job in whatever running state claimed it;
+            # Unusable is the shape every caller fails-and-records on.
+            raise Unusable(f"Anthropic could not serve this call: {exc}") from exc
         return Reply(data=self._read(response), usage=self._usage(response))
 
     @staticmethod

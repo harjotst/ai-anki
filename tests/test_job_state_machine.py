@@ -401,3 +401,20 @@ def test_each_topic_carries_its_own_status_and_attempt_count(client, claude):
     assert [t["status"] for t in generated] == ["done", "done"]
     assert [t["attempt_count"] for t in generated] == [1, 1]
     assert [t["card_count"] for t in generated] == [2, 1]
+
+
+def test_an_api_error_fails_the_job_instead_of_stranding_it(client, claude):
+    """A 400 from the API marks the job failed — visible and retryable —
+    rather than leaving it claiming `planning` until a reboot notices.
+
+    Observed live 2026-08-26: a parameter one model accepts and another
+    refuses left a job stuck in `planning` with nothing on screen to tap.
+    """
+    job_id = upload(client)
+    claude.answers_error(400, "this model does not support the `fallbacks` parameter")
+    reply = client.post(f"/api/jobs/{job_id}/plan")
+
+    assert reply.status_code == 422
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["state"] == "failed"
+    assert "fallbacks" in job["error"]

@@ -260,6 +260,15 @@ class ClaudeScript:
         self._queue(_KILLED)
         return self
 
+    def answers_error(self, status: int, message: str):
+        """Queue an HTTP error from the API itself — a 400, an overload.
+
+        Distinct from `dies`: the machine survives this, and what matters is
+        what it does with a job whose call just refused to run.
+        """
+        self._queue({"__error_status__": status, "__error_message__": message})
+        return self
+
     def wait_for_paused_call(self, timeout: float) -> bool:
         """Block until a paused call is in flight."""
         return self._paused.wait(timeout)
@@ -316,6 +325,26 @@ class ClaudeScript:
             if index > 0 and self._in_flight > 1 and index == 1:
                 self.overlapped_with_first = True
         request = self.requests[index]
+
+        # The live API's contract, enforced so the suite refuses what the real
+        # endpoint refuses. Sonnet 5 answers 400 to `fallbacks` (verified live
+        # 2026-08-26, req_011CeQfD9jcBcLEpdiDRjox7 — it took down a planning
+        # run); only Opus 5 accepts the parameter.
+        if "fallbacks" in request and request.get("model") != "claude-opus-5":
+            with self._lock:
+                self._in_flight -= 1
+            return httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": f"'{request.get('model')}' does not support"
+                        " the `fallbacks` parameter.",
+                    },
+                },
+            )
+
         kind = self._kind_of(request)
         if kind == "lesson" and "lesson" not in self._by_kind:
             # Every topic is taught before it is drilled, so a lesson call now
@@ -344,6 +373,17 @@ class ClaudeScript:
             self._in_flight -= 1
         if body is _KILLED:
             raise MachineKilled("the machine was killed during this call")
+        if isinstance(body, dict) and "__error_status__" in body:
+            return httpx.Response(
+                body["__error_status__"],
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": body["__error_message__"],
+                    },
+                },
+            )
         return httpx.Response(200, json=body)
 
     def _as_message(self, payload: dict, usage: dict | None = None) -> dict:

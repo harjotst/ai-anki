@@ -468,3 +468,28 @@ def test_the_estimate_errs_high_because_that_is_the_cheaper_mistake(tmp_path):
     assert TOKENS_PER_PAGE_ESTIMATE >= 3_000
     assert estimate_document_tokens(None) > 0
     assert estimate_document_tokens(tmp_path / "does-not-exist.pdf") > 0
+
+
+def test_fallbacks_goes_only_to_the_model_that_accepts_it(claude):
+    """Sonnet 5 refuses the whole request over a parameter Opus 5 accepts.
+
+    Not hypothetical: the live API answered 400 to a real planning run on
+    2026-08-26 (req_011CeQfD9jcBcLEpdiDRjox7) because `fallbacks` was sent
+    unconditionally. The transport in these tests now enforces the same
+    contract, so sending it to the wrong model fails loudly here first.
+    """
+    schema = {"type": "object", "additionalProperties": False, "properties": {}}
+
+    opus = AnthropicProvider(claude.client(), model="claude-opus-5")
+    claude.replies_json({})
+    opus.send(opus.build_request(
+        system="s", documents=[], instruction="i", schema=schema, max_tokens=64
+    ))
+    assert claude.requests[-1]["fallbacks"] == "default"
+
+    sonnet = AnthropicProvider(claude.client(), model="claude-sonnet-5")
+    claude.replies_json({})
+    sonnet.send(sonnet.build_request(
+        system="s", documents=[], instruction="i", schema=schema, max_tokens=64
+    ))
+    assert "fallbacks" not in claude.requests[-1]

@@ -319,6 +319,15 @@ def create_app(
         except providers.Unusable as exc:
             jobs.fail_job(conn, job_id, str(exc))
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # A bug is not a reason to strand the job in `planning` until the
+            # next reboot notices: failed is retryable from the phone, stuck
+            # is a support call. Observed live 2026-08-26, when an API 400
+            # left a job in `planning` with nothing to tap.
+            jobs.fail_job(conn, job_id, f"planning crashed: {exc}")
+            raise
 
         jobs.save_plan(conn, job_id, plan)
         return {"job_id": job_id, "plan": plan}
