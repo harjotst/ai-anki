@@ -650,3 +650,29 @@ def test_a_file_handle_from_one_vendor_is_never_sent_to_another(pg_dsn, tmp_path
         assert third.uploads == []
     finally:
         conn.close()
+
+
+def test_a_rate_limit_is_a_request_to_wait_not_a_failure():
+    """A 429 carries its own remedy — "try again in 19s" — and recording it
+    as a dead topic wastes exactly the call a pause would have saved.
+    Observed live 2026-08-26: a five-topic fan-out of 64k-token calls
+    against a 200k-TPM organization limit failed four topics this way."""
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    response = httpx.Response(429, request=request, headers={"retry-after": "19"})
+
+    class Limited:
+        class responses:
+            @staticmethod
+            def create(**_request):
+                raise openai.RateLimitError(
+                    "Rate limit reached on tokens per min (TPM). Please try again in 19.14s.",
+                    response=response,
+                    body=None,
+                )
+
+    with pytest.raises(providers.RateLimited) as caught:
+        OpenAIProvider(Limited()).send({"model": "gpt-5.6-luna"})
+    assert caught.value.retry_after == 19.0

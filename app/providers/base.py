@@ -31,6 +31,21 @@ class Unusable(Exception):
     """
 
 
+class RateLimited(Exception):
+    """The vendor said not yet, and usually said when.
+
+    Distinct from Unusable because the correct response is opposite: an
+    Unusable call is recorded and given up on, a rate-limited one is worth
+    exactly one thing — waiting. Observed live 2026-08-26: a five-topic
+    fan-out of 64k-token calls against a 200k-TPM organization limit failed
+    two topics that a 20-second pause would have carried.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 @dataclass(frozen=True)
 class Usage:
     """What one call cost, as the vendor reported it."""

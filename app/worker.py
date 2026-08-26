@@ -41,6 +41,15 @@ MAX_CONCURRENT_TOPICS = 5
 
 DRAIN_DEADLINE_SECONDS = 270.0
 
+# How a rate limit is survived: wait what the vendor asked (or this default
+# when it named nothing), then send again — a bounded number of times, because
+# a limit that never lifts is an outage, not a queue. The waiting call holds
+# its fan-out slot the whole time, which is the point: the fan-out self-paces
+# to whatever tokens-per-minute tier the organization actually has.
+MAX_RATE_LIMIT_WAITS = 4
+DEFAULT_RATE_LIMIT_PAUSE_SECONDS = 20.0
+MAX_RATE_LIMIT_PAUSE_SECONDS = 120.0
+
 
 class WorkerDraining(Exception):
     """The machine is shutting down and is not accepting new work."""
@@ -53,6 +62,7 @@ class Worker:
         provider,
         *,
         drain_deadline_seconds: float = DRAIN_DEADLINE_SECONDS,
+        rate_limit_pause_seconds: float = DEFAULT_RATE_LIMIT_PAUSE_SECONDS,
     ):
         # Identifies this process instance. A job claimed by any other id is a
         # job whose machine is gone.
@@ -60,8 +70,23 @@ class Worker:
         self._database_url = database_url
         self._provider = provider
         self._drain_deadline_seconds = drain_deadline_seconds
+        self._rate_limit_pause_seconds = rate_limit_pause_seconds
         self._draining = False
         self._runs: dict[str, asyncio.Task] = {}
+
+    async def _send_waiting_out_rate_limits(self, request):
+        for waits in range(MAX_RATE_LIMIT_WAITS + 1):
+            try:
+                return await asyncio.to_thread(self._provider.send, request)
+            except providers.RateLimited as exc:
+                if waits == MAX_RATE_LIMIT_WAITS or self._draining:
+                    # Out of patience (or out of time): recorded like any
+                    # other refusal, and retryable by the person later.
+                    raise providers.Unusable(str(exc)) from exc
+                pause = exc.retry_after
+                if pause is None:
+                    pause = self._rate_limit_pause_seconds
+                await asyncio.sleep(min(pause + 1.0, MAX_RATE_LIMIT_PAUSE_SECONDS))
 
     @property
     def draining(self) -> bool:
@@ -206,7 +231,7 @@ class Worker:
                 # The SDK is synchronous and a topic call takes many seconds. On the
                 # event loop it would block every other request, and the shutdown
                 # handler along with them.
-                result = await asyncio.to_thread(self._provider.send, request)
+                result = await self._send_waiting_out_rate_limits(request)
             except providers.Unusable as exc:
                 # One topic refusing is not the job failing. The rest still run, and
                 # this one can be retried on its own.
@@ -240,7 +265,7 @@ class Worker:
             documents, topic.topic, self._provider, detail_level=detail_level
         )
         try:
-            result = await asyncio.to_thread(self._provider.send, request)
+            result = await self._send_waiting_out_rate_limits(request)
         except providers.Unusable as exc:
             await asyncio.to_thread(
                 jobs.fail_topic, conn, job_id, topic.topic_id, str(exc)

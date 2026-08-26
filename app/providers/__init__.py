@@ -11,6 +11,7 @@ from app.providers.base import (
     Capabilities,
     Prices,
     Provider,
+    RateLimited,
     Reply,
     Unusable,
     Usage,
@@ -18,8 +19,8 @@ from app.providers.base import (
 )
 
 __all__ = [
-    "Capabilities", "Prices", "Provider", "Reply", "Unusable", "Usage",
-    "check_usable", "build", "PROVIDERS",
+    "Capabilities", "Prices", "Provider", "RateLimited", "Reply", "Unusable",
+    "Usage", "check_usable", "build", "PROVIDERS",
 ]
 
 PROVIDERS = ("anthropic", "gemini", "openai")

@@ -28,7 +28,9 @@ from app.providers.anthropic_provider import (
     INLINE_TEXT_SUFFIXES,
     estimate_document_tokens,
 )
-from app.providers.base import Capabilities, Prices, Reply, Unusable, Usage
+import re
+
+from app.providers.base import Capabilities, Prices, RateLimited, Reply, Unusable, Usage
 
 MODELS = {
     # Verified 2026-08-26 against developers.openai.com/api/docs/models and
@@ -40,6 +42,26 @@ MODELS = {
 # The only TTL GPT-5.6+ accepts, and how long a prefix survives after its
 # last use. Above the app's 20-minute floor; nowhere near Anthropic's hour.
 CACHE_TTL = "30m"
+
+
+def _retry_after(exc) -> float | None:
+    """How long the server asked us to wait, if it said.
+
+    The retry-after header when present; otherwise the "try again in 19.14s"
+    the 429 body spells out; otherwise nothing, and the caller uses its own
+    default.
+    """
+    header = None
+    response = getattr(exc, "response", None)
+    if response is not None:
+        header = getattr(response, "headers", {}).get("retry-after")
+    if header:
+        try:
+            return float(header)
+        except ValueError:
+            pass
+    said = re.search(r"try again in (\d+(?:\.\d+)?)s", str(exc))
+    return float(said.group(1)) if said else None
 
 
 class OpenAIProvider:
@@ -138,6 +160,13 @@ class OpenAIProvider:
     def send(self, request: dict) -> Reply:
         try:
             response = self._client.responses.create(**request)
+        except openai.RateLimitError as exc:
+            # A 429 is the one failure worth waiting out rather than recording:
+            # the SDK's own retries are seconds apart, and a TPM window says
+            # "try again in 19s". The server names the wait; pass it up.
+            raise RateLimited(
+                f"OpenAI rate limit: {exc}", retry_after=_retry_after(exc)
+            ) from exc
         except openai.OpenAIError as exc:
             # The SDK has already retried what is worth retrying. Raised raw,
             # this strands the job in whatever running state claimed it;

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import anthropic
 
-from app.providers.base import Capabilities, Prices, Reply, Unusable, Usage
+from app.providers.base import Capabilities, Prices, RateLimited, Reply, Unusable, Usage
 
 FILES_BETA = "files-api-2025-04-14"
 # On a policy decline the API re-runs the request on a fallback model inside the
@@ -216,6 +216,19 @@ class AnthropicProvider:
             response = self._client.beta.messages.create(
                 **request, betas=betas, **extra
             )
+        except anthropic.RateLimitError as exc:
+            # Worth waiting out, not recording — the caller owns the pause.
+            retry_after = None
+            response_obj = getattr(exc, "response", None)
+            if response_obj is not None:
+                raw = getattr(response_obj, "headers", {}).get("retry-after")
+                try:
+                    retry_after = float(raw) if raw else None
+                except ValueError:
+                    retry_after = None
+            raise RateLimited(
+                f"Anthropic rate limit: {exc}", retry_after=retry_after
+            ) from exc
         except anthropic.APIError as exc:
             # The SDK has already retried whatever was worth retrying. Raised
             # raw, this strands the job in whatever running state claimed it;

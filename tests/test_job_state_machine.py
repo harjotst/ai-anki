@@ -418,3 +418,35 @@ def test_an_api_error_fails_the_job_instead_of_stranding_it(client, claude):
     job = client.get(f"/api/jobs/{job_id}").json()
     assert job["state"] == "failed"
     assert "fallbacks" in job["error"]
+
+
+def test_a_rate_limited_burst_is_waited_out_not_failed(boot, claude):
+    """The vendor's tokens-per-minute window says "try again in 19s"; the
+    worker's answer is to wait and send again, holding its fan-out slot so
+    the whole run self-paces to the tier the organization actually has.
+    Observed live 2026-08-26 on OpenAI: without the wait, four of eight
+    topics died inside one window."""
+    with boot(rate_limit_pause_seconds=0.05) as machine:
+        claude.replies_json(PLAN)
+        job_id = upload(machine)
+        machine.post(f"/api/jobs/{job_id}/plan")
+
+        for _ in range(3):
+            claude.answers_error(429, "Rate limit reached on tokens per min (TPM)")
+        claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+
+        reply = machine.post(f"/api/jobs/{job_id}/generate")
+        assert reply.status_code == 200
+        assert [t["status"] for t in topics_of(machine, job_id)] == ["done", "done"]
+
+
+def test_a_rate_limited_planning_call_waits_too(boot, claude):
+    with boot(rate_limit_pause_seconds=0.05) as machine:
+        job_id = upload(machine)
+        for _ in range(3):
+            claude.answers_error(429, "Rate limit reached on tokens per min (TPM)")
+        claude.replies_json(PLAN)
+
+        reply = machine.post(f"/api/jobs/{job_id}/plan")
+        assert reply.status_code == 200
+        assert machine.get(f"/api/jobs/{job_id}").json()["state"] == "plan_ready"

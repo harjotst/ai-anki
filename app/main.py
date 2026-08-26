@@ -30,6 +30,7 @@ def create_app(
     *,
     resume_backoff_seconds: float = jobs.MIN_RESUME_BACKOFF_SECONDS,
     drain_deadline_seconds: float = worker_module.DRAIN_DEADLINE_SECONDS,
+    rate_limit_pause_seconds: float = worker_module.DEFAULT_RATE_LIMIT_PAUSE_SECONDS,
     heartbeat_seconds: float = progress.HEARTBEAT_SECONDS,
     event_stream_seconds: float = progress.MAX_STREAM_SECONDS,
     per_job_token_ceiling: int = budget.PER_JOB_TOKEN_CEILING,
@@ -55,7 +56,30 @@ def create_app(
             f"{provider.name}/{provider.model} cannot serve this workload: "
             + "; ".join(refusals)
         )
-    worker = worker_module.Worker(database_url, provider, drain_deadline_seconds=drain_deadline_seconds)
+    worker = worker_module.Worker(
+        database_url,
+        provider,
+        drain_deadline_seconds=drain_deadline_seconds,
+        rate_limit_pause_seconds=rate_limit_pause_seconds,
+    )
+
+    def send_patiently(request):
+        """Send, waiting out rate limits the way the worker does.
+
+        For the calls that run inside a request handler's thread — planning
+        and rerolls — where a 429 with "try again in 19s" deserves the wait,
+        not a failed job.
+        """
+        for waits in range(worker_module.MAX_RATE_LIMIT_WAITS + 1):
+            try:
+                return provider.send(request)
+            except providers.RateLimited as exc:
+                if waits == worker_module.MAX_RATE_LIMIT_WAITS:
+                    raise providers.Unusable(str(exc)) from exc
+                pause = exc.retry_after
+                if pause is None:
+                    pause = rate_limit_pause_seconds
+                _time.sleep(min(pause + 1.0, worker_module.MAX_RATE_LIMIT_PAUSE_SECONDS))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -333,7 +357,7 @@ def create_app(
             # too large must cost nothing beyond this count.
             guard_size(conn, job_id, request)
 
-            reply = provider.send(request)
+            reply = send_patiently(request)
             jobs.record_usage(conn, job_id, "plan", reply.usage, model=provider.model)
             plan = reply.data
         except providers.Unusable as exc:
@@ -568,7 +592,7 @@ def create_app(
             f"way:\n{existing['front']}\n"
         )
         try:
-            reply = provider.send(request)
+            reply = send_patiently(request)
         except providers.Unusable as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
