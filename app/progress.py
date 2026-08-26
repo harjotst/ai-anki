@@ -84,18 +84,16 @@ async def stream(
     outlives the handler that created it, and the worker is writing on a handle
     of its own the whole time.
     """
-    conn = db.connect(database_url)
+    # Connected and read on threads: this generator lives on the event loop
+    # for minutes, and a database read stuck on a dead socket here would take
+    # every other request down with it.
+    conn = await asyncio.to_thread(db.connect, database_url)
     deadline = time.monotonic() + max_seconds
     last_id = after_id
     last_frame_at = time.monotonic()
     try:
         while True:
-            # The state is read before the events, never after. Read the other
-            # way round, a job that finishes between the two reads would be
-            # declared over on this connection before the events that say how it
-            # ended had been sent.
-            state = _state_of(conn, job_id)
-            events = jobs.events_since(conn, job_id, last_id)
+            state, events = await asyncio.to_thread(_snapshot, conn, job_id, last_id)
             for event in events:
                 yield frame(event.kind, event.data, id=event.id)
                 last_id = event.id
@@ -113,7 +111,17 @@ async def stream(
                 return
             await asyncio.sleep(POLL_SECONDS)
     finally:
-        conn.close()
+        await asyncio.to_thread(conn.close)
+
+
+def _snapshot(conn, job_id: str, after_id: int):
+    """One poll's worth of reading, as a single unit of thread work.
+
+    The state is read before the events, never after. Read the other way
+    round, a job that finishes between the two reads would be declared over
+    on this connection before the events that say how it ended had been sent.
+    """
+    return _state_of(conn, job_id), jobs.events_since(conn, job_id, after_id)
 
 
 def _state_of(conn, job_id: str) -> str | None:

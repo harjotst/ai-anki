@@ -19,6 +19,7 @@ forgotten decorator on the one route that spends money.
 
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import urlsplit
 
 from fastapi.responses import JSONResponse
@@ -135,11 +136,10 @@ class Guard:
                 )
                 return
 
-        conn = db.connect(self._database_url)
-        try:
-            account = identity.account_for(conn, claims)
-        finally:
-            conn.close()
+        # On a thread, never the event loop: this runs for every request, and
+        # a connect or read stuck on a dead socket here once froze the whole
+        # server — every endpoint sits behind this middleware.
+        account = await asyncio.to_thread(self._resolve_account, claims)
 
         if request.url.path.startswith(ADMIN_PREFIXES) and not account.is_admin:
             await self._refuse(403, "this needs an administrator", scope, receive, send)
@@ -149,6 +149,13 @@ class Guard:
         # by the routes as the identity every job is recorded against.
         scope.setdefault("state", {})["account"] = account
         await self.app(scope, receive, send)
+
+    def _resolve_account(self, claims) -> identity.Account:
+        conn = db.connect(self._database_url)
+        try:
+            return identity.account_for(conn, claims)
+        finally:
+            conn.close()
 
     async def _refuse(self, status: int, detail: str, scope, receive, send) -> None:
         await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)

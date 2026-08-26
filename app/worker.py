@@ -103,12 +103,15 @@ class Worker:
         if not stranded:
             return
 
-        conn = db.connect(self._database_url)
-        try:
-            for job_id in stranded:
-                jobs.interrupt_job(conn, job_id, "interrupted by a shutdown")
-        finally:
-            conn.close()
+        def checkpoint() -> None:
+            conn = db.connect(self._database_url)
+            try:
+                for job_id in stranded:
+                    jobs.interrupt_job(conn, job_id, "interrupted by a shutdown")
+            finally:
+                conn.close()
+
+        await asyncio.to_thread(checkpoint)
         for job_id in stranded:
             running[job_id].cancel()
         await asyncio.gather(*(running[job_id] for job_id in stranded), return_exceptions=True)
@@ -122,16 +125,21 @@ class Worker:
         one pays a cache-creation charge — which costs more than not caching at
         all. One call ahead of the pack turns N-1 misses into N-1 reads.
         """
-        conn = db.connect(self._database_url)
+        # Every database touch goes through a thread: this coroutine shares
+        # the event loop with every request the server is answering, and a
+        # read stuck on a dead socket once froze all of them at once.
+        conn = await asyncio.to_thread(db.connect, self._database_url)
         try:
-            documents = jobs.documents_for(conn, job_id, self._provider)
-            pending = jobs.unfinished_topics(conn, job_id)
+            documents = await asyncio.to_thread(
+                jobs.documents_for, conn, job_id, self._provider
+            )
+            pending = await asyncio.to_thread(jobs.unfinished_topics, conn, job_id)
             if not pending:
-                return jobs.settle_job(conn, job_id)
+                return await asyncio.to_thread(jobs.settle_job, conn, job_id)
 
             # The pacesetter writes the shared prefix.
             first, rest = pending[0], pending[1:]
-            if await self._one_topic(conn, job_id, first, documents) is None:
+            if await self._one_topic(job_id, first, documents) is None:
                 return jobs.INTERRUPTED
 
             if rest:
@@ -139,17 +147,17 @@ class Worker:
 
                 async def bounded(topic):
                     async with limit:
-                        return await self._one_topic(conn, job_id, topic, documents)
+                        return await self._one_topic(job_id, topic, documents)
 
                 results = await asyncio.gather(*(bounded(t) for t in rest))
                 if any(outcome is None for outcome in results):
                     return jobs.INTERRUPTED
 
-            return jobs.settle_job(conn, job_id)
+            return await asyncio.to_thread(jobs.settle_job, conn, job_id)
         finally:
-            conn.close()
+            await asyncio.to_thread(conn.close)
 
-    async def _one_topic(self, conn, job_id: str, topic, documents) -> bool | None:
+    async def _one_topic(self, job_id: str, topic, documents) -> bool | None:
         """Teach one topic, then write its cards.
 
         The lesson comes first because that is the order the material has to be
@@ -158,42 +166,61 @@ class Worker:
         different schemas and therefore separate lineages -- before the rest of
         the topics fan out and read them.
 
+        On a connection of its own, opened here rather than passed in: five of
+        these run at once with their database work on threads, and concurrent
+        transactions interleaved over one shared connection would nest into
+        each other rather than commit independently.
+
         None means a shutdown cut it short.
         """
-        if self._draining:
-            jobs.interrupt_job(conn, job_id, "interrupted by a shutdown")
-            return None
-
-        jobs.start_topic(conn, job_id, topic.topic_id)
-
-        taught = await self._teach(conn, job_id, topic, documents)
-        if taught is False:
-            return False
-
-        request = generation.build_cards_request(
-            documents,
-            topic.topic,
-            self._provider,
-            jobs.existing_cards_for_topic(conn, job_id, topic.topic_id),
-            jobs.sibling_topics(conn, job_id, topic.topic_id),
-        )
+        conn = await asyncio.to_thread(db.connect, self._database_url)
         try:
-            # The SDK is synchronous and a topic call takes many seconds. On the
-            # event loop it would block every other request, and the shutdown
-            # handler along with them.
-            result = await asyncio.to_thread(self._provider.send, request)
-        except providers.Unusable as exc:
-            # One topic refusing is not the job failing. The rest still run, and
-            # this one can be retried on its own.
-            jobs.fail_topic(conn, job_id, topic.topic_id, str(exc))
-            return False
+            if self._draining:
+                await asyncio.to_thread(
+                    jobs.interrupt_job, conn, job_id, "interrupted by a shutdown"
+                )
+                return None
 
-        jobs.record_usage(
-            conn, job_id, "cards", result.usage,
-            topic_id=topic.topic_id, model=self._provider.model,
-        )
-        jobs.save_topic_cards(conn, job_id, topic.topic, result.data["cards"])
-        return True
+            await asyncio.to_thread(jobs.start_topic, conn, job_id, topic.topic_id)
+
+            taught = await self._teach(conn, job_id, topic, documents)
+            if taught is False:
+                return False
+
+            def build_request():
+                return generation.build_cards_request(
+                    documents,
+                    topic.topic,
+                    self._provider,
+                    jobs.existing_cards_for_topic(conn, job_id, topic.topic_id),
+                    jobs.sibling_topics(conn, job_id, topic.topic_id),
+                )
+
+            request = await asyncio.to_thread(build_request)
+            try:
+                # The SDK is synchronous and a topic call takes many seconds. On the
+                # event loop it would block every other request, and the shutdown
+                # handler along with them.
+                result = await asyncio.to_thread(self._provider.send, request)
+            except providers.Unusable as exc:
+                # One topic refusing is not the job failing. The rest still run, and
+                # this one can be retried on its own.
+                await asyncio.to_thread(
+                    jobs.fail_topic, conn, job_id, topic.topic_id, str(exc)
+                )
+                return False
+
+            def record():
+                jobs.record_usage(
+                    conn, job_id, "cards", result.usage,
+                    topic_id=topic.topic_id, model=self._provider.model,
+                )
+                jobs.save_topic_cards(conn, job_id, topic.topic, result.data["cards"])
+
+            await asyncio.to_thread(record)
+            return True
+        finally:
+            await asyncio.to_thread(conn.close)
 
     async def _teach(self, conn, job_id: str, topic, documents) -> bool:
         """Write the lesson for one topic.
@@ -206,12 +233,17 @@ class Worker:
         try:
             result = await asyncio.to_thread(self._provider.send, request)
         except providers.Unusable as exc:
-            jobs.fail_topic(conn, job_id, topic.topic_id, str(exc))
+            await asyncio.to_thread(
+                jobs.fail_topic, conn, job_id, topic.topic_id, str(exc)
+            )
             return False
 
-        jobs.record_usage(
-            conn, job_id, "lesson", result.usage,
-            topic_id=topic.topic_id, model=self._provider.model,
-        )
-        jobs.save_lesson(conn, job_id, topic.topic, lessons.clean(result.data))
+        def record():
+            jobs.record_usage(
+                conn, job_id, "lesson", result.usage,
+                topic_id=topic.topic_id, model=self._provider.model,
+            )
+            jobs.save_lesson(conn, job_id, topic.topic, lessons.clean(result.data))
+
+        await asyncio.to_thread(record)
         return True

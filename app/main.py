@@ -99,11 +99,11 @@ def create_app(
         allowed_emails=allowed_emails,
     )
 
-    async def get_conn():
-        # Async so the connection is created and used on the same thread. A sync
-        # dependency would be resolved in a threadpool and then handed to the
-        # event loop, which SQLite refuses. Statements here are sub-millisecond;
-        # long-running work belongs in the worker, not in a request.
+    def get_conn():
+        # Sync on purpose, like the handlers below: FastAPI resolves it on the
+        # threadpool, so connecting — a TLS round trip to a database across the
+        # internet — never runs on the event loop, where one dead socket once
+        # froze every request at once. psycopg connections may cross threads.
         conn = db.connect(database_url)
         try:
             yield conn
@@ -166,7 +166,7 @@ def create_app(
         return job
 
     @app.post("/api/jobs", status_code=201)
-    async def create_job(
+    def create_job(
         file: UploadFile,
         deck_id: str | None = Form(default=None),
         conn=Depends(get_conn),
@@ -183,7 +183,7 @@ def create_app(
                 raise HTTPException(
                     status_code=403, detail="only the owner can add material to this deck"
                 )
-        content = await file.read()
+        content = file.file.read()
         job_id = jobs.create_job(
             conn,
             data_dir,
@@ -208,16 +208,16 @@ def create_app(
         )
 
     @app.get("/api/jobs")
-    async def list_jobs(conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
+    def list_jobs(conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
         """Everything this person has started. The way back to a run."""
         return {"jobs": jobs.list_jobs(conn, account.id)}
 
     @app.get("/api/decks")
-    async def list_decks(conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
+    def list_decks(conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
         return {"decks": ledger.list_decks(conn, account.id)}
 
     @app.patch("/api/decks/{deck_id}")
-    async def rename_deck(
+    def rename_deck(
         deck_id: str,
         body: dict,
         conn=Depends(get_conn),
@@ -237,7 +237,7 @@ def create_app(
         return {"deck_id": deck_id}
 
     @app.get("/api/jobs/{job_id}")
-    async def read_job(
+    def read_job(
         job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         job = owned_job(conn, job_id, account.id)
@@ -258,7 +258,7 @@ def create_app(
         }
 
     @app.get("/api/jobs/{job_id}/topics")
-    async def read_topics(job_id: str, conn=Depends(get_conn)):
+    def read_topics(job_id: str, conn=Depends(get_conn)):
         if jobs.load_job(conn, job_id) is None:
             raise HTTPException(status_code=404, detail="job not found")
         return {
@@ -276,7 +276,7 @@ def create_app(
         }
 
     @app.get("/api/jobs/{job_id}/events")
-    async def watch_job(job_id: str, request: Request, conn=Depends(get_conn)):
+    def watch_job(job_id: str, request: Request, conn=Depends(get_conn)):
         """Progress for one job, as a stream a browser can be dropped from.
 
         What is streamed is the job's persisted event log and nothing else, so
@@ -299,7 +299,7 @@ def create_app(
         )
 
     @app.post("/api/jobs/{job_id}/plan")
-    async def plan_job(job_id: str, conn=Depends(get_conn)):
+    def plan_job(job_id: str, conn=Depends(get_conn)):
         job = jobs.load_job(conn, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -324,7 +324,7 @@ def create_app(
         return {"job_id": job_id, "plan": plan}
 
     @app.get("/api/decks/{deck_id}/jobs")
-    async def deck_jobs(
+    def deck_jobs(
         deck_id: str,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -355,7 +355,7 @@ def create_app(
         }
 
     @app.get("/api/decks/{deck_id}/ledger")
-    async def read_ledger(
+    def read_ledger(
         deck_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What this Deck knows about its own cards. Never purged."""
@@ -364,7 +364,7 @@ def create_app(
         return {"deck_id": deck_id, "cards": ledger.entries(conn, deck_id)}
 
     @app.get("/api/spend")
-    async def read_spend(conn=Depends(get_conn)):
+    def read_spend(conn=Depends(get_conn)):
         """Who has spent what. The owner's view."""
         return {
             "people": budget.spend_by_person(conn),
@@ -373,7 +373,7 @@ def create_app(
         }
 
     @app.post("/api/maintenance/purge")
-    async def purge(body: dict, conn=Depends(get_conn)):
+    def purge(body: dict, conn=Depends(get_conn)):
         """Drop old uploads and packages. The ledger is never touched.
 
         Retention is split by data class deliberately: sources are the bulk and
@@ -413,7 +413,7 @@ def create_app(
         }
 
     @app.get("/api/jobs/{job_id}/usage")
-    async def read_usage(
+    def read_usage(
         job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What this job actually cost, derived from what the API reported."""
@@ -427,7 +427,7 @@ def create_app(
         }
 
     @app.get("/api/jobs/{job_id}/estimate")
-    async def read_estimate(
+    def read_estimate(
         job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What this job measures and what it is expected to cost.
@@ -458,7 +458,7 @@ def create_app(
         }
 
     @app.put("/api/jobs/{job_id}/plan")
-    async def edit_plan(
+    def edit_plan(
         job_id: str, body: dict, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """Replace the plan with the user's edited version.
@@ -490,7 +490,7 @@ def create_app(
         raise HTTPException(status_code=404, detail="no such card")
 
     @app.patch("/api/cards/{card_uuid}")
-    async def edit_card(
+    def edit_card(
         card_uuid: str,
         body: dict,
         conn=Depends(get_conn),
@@ -502,7 +502,7 @@ def create_app(
         return {"card_uuid": card_uuid}
 
     @app.delete("/api/cards/{card_uuid}")
-    async def reject_card(
+    def reject_card(
         card_uuid: str,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -513,14 +513,14 @@ def create_app(
         return {"card_uuid": card_uuid, "rejected": True}
 
     @app.delete("/api/jobs/{job_id}/topics/{topic_id}/cards")
-    async def reject_topic(
+    def reject_topic(
         job_id: str, topic_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         owned_job(conn, job_id, account.id)
         return {"rejected": jobs.delete_topic_cards(conn, job_id, topic_id)}
 
     @app.post("/api/cards/{card_uuid}/reroll")
-    async def reroll_card(
+    def reroll_card(
         card_uuid: str,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -558,7 +558,7 @@ def create_app(
         return {"card_uuid": card_uuid}
 
     @app.get("/api/jobs/{job_id}/download-info")
-    async def download_info(
+    def download_info(
         job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What to tell the user at the moment they import."""
@@ -582,25 +582,30 @@ def create_app(
 
     @app.post("/api/jobs/{job_id}/generate")
     async def generate_cards(job_id: str, conn=Depends(get_conn)):
-        job = jobs.load_job(conn, job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
-        if job.plan is None:
-            raise HTTPException(status_code=409, detail="job has no approved plan yet")
-        guard_spend(conn, job.account_id)
-        # Re-checked here, not only at admission: a plan multiplies the work and
-        # the sources may have grown between the two passes.
-        guard_size(
-            conn,
-            job_id,
-            plan_request_for(conn, job_id, job),
-        )
-        if worker.draining:
-            # Claiming an attempt we cannot run would spend one of the three
-            # this job is allowed.
-            raise HTTPException(status_code=503, detail="the machine is shutting down")
-        _claim(conn, job_id, jobs.GENERATING)
+        # Async only for the generation run itself. The admission checks read
+        # the database and count tokens over the network, so they go to a
+        # thread like every other handler's blocking work.
+        def admit() -> None:
+            job = jobs.load_job(conn, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            if job.plan is None:
+                raise HTTPException(status_code=409, detail="job has no approved plan yet")
+            guard_spend(conn, job.account_id)
+            # Re-checked here, not only at admission: a plan multiplies the work and
+            # the sources may have grown between the two passes.
+            guard_size(
+                conn,
+                job_id,
+                plan_request_for(conn, job_id, job),
+            )
+            if worker.draining:
+                # Claiming an attempt we cannot run would spend one of the three
+                # this job is allowed.
+                raise HTTPException(status_code=503, detail="the machine is shutting down")
+            _claim(conn, job_id, jobs.GENERATING)
 
+        await asyncio.to_thread(admit)
         try:
             state = await worker.generate(job_id)
         except worker_module.WorkerDraining as exc:
@@ -608,11 +613,11 @@ def create_app(
         return {
             "job_id": job_id,
             "state": state,
-            "card_count": len(jobs.load_cards(conn, job_id)),
+            "card_count": len(await asyncio.to_thread(jobs.load_cards, conn, job_id)),
         }
 
     @app.post("/api/jobs/{job_id}/clear")
-    async def clear_job(job_id: str, conn=Depends(get_conn)):
+    def clear_job(job_id: str, conn=Depends(get_conn)):
         """The manual intervention a dead job requires before it runs again."""
         if jobs.load_job(conn, job_id) is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -673,7 +678,7 @@ def create_app(
         return deck_id
 
     @app.post("/api/decks/{deck_id}/study")
-    async def start_studying(
+    def start_studying(
         deck_id: str,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -685,7 +690,7 @@ def create_app(
         return {"deck_id": deck_id, "added": added}
 
     @app.get("/api/decks/{deck_id}/due")
-    async def read_due(
+    def read_due(
         deck_id: str,
         at: str | None = None,
         conn=Depends(get_conn),
@@ -695,7 +700,7 @@ def create_app(
         return {"cards": study.due_cards(conn, account.id, deck_id, _at(at))}
 
     @app.get("/api/decks/{deck_id}/cards")
-    async def read_deck_cards(
+    def read_deck_cards(
         deck_id: str,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -704,7 +709,7 @@ def create_app(
         return {"cards": study.deck_cards(conn, account.id, deck_id)}
 
     @app.get("/api/decks/{deck_id}/mastery")
-    async def read_mastery(
+    def read_mastery(
         deck_id: str,
         at: str | None = None,
         conn=Depends(get_conn),
@@ -714,7 +719,7 @@ def create_app(
         return study.mastery(conn, account.id, deck_id, _at(at))
 
     @app.post("/api/reviews")
-    async def record_reviews(
+    def record_reviews(
         body: dict,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -744,7 +749,7 @@ def create_app(
         return {"accepted": accepted, "submitted": len(reviews), "skipped": skipped}
 
     @app.get("/api/cards/{card_uuid}/reviews")
-    async def read_card_history(
+    def read_card_history(
         card_uuid: str,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -756,14 +761,14 @@ def create_app(
     # --- friends, and competing with them --------------------------------
 
     @app.post("/api/decks/import")
-    async def import_deck(
+    def import_deck(
         file: UploadFile,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
     ):
         """Bring an existing Anki deck in. Its notes keep their guids, so a
         later export updates the person's Anki collection in place."""
-        content = await file.read()
+        content = file.file.read()
         try:
             with db.transaction(conn):
                 result = importing.import_apkg(
@@ -774,7 +779,7 @@ def create_app(
         return result
 
     @app.get("/api/me")
-    async def read_me(
+    def read_me(
         conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         with db.transaction(conn):
@@ -792,7 +797,7 @@ def create_app(
         }
 
     @app.patch("/api/me")
-    async def update_me(
+    def update_me(
         body: dict,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -812,16 +817,16 @@ def create_app(
                 "UPDATE account SET display_name = %s WHERE id = %s",
                 (name, account.id),
             )
-        return await read_me(conn=conn, account=account)
+        return read_me(conn=conn, account=account)
 
     @app.get("/api/friends")
-    async def read_friends(
+    def read_friends(
         conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         return social.listing(conn, account.id)
 
     @app.post("/api/friends")
-    async def add_friend(
+    def add_friend(
         body: dict,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -839,7 +844,7 @@ def create_app(
         return {"account_id": other, "state": social.PENDING}
 
     @app.post("/api/friends/{other}/accept")
-    async def accept_friend(
+    def accept_friend(
         other: str,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -851,7 +856,7 @@ def create_app(
         return {"account_id": other, "state": social.ACCEPTED}
 
     @app.delete("/api/friends/{other}")
-    async def remove_friend(
+    def remove_friend(
         other: str,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -861,7 +866,7 @@ def create_app(
         return {"account_id": other, "state": "none"}
 
     @app.post("/api/decks/{deck_id}/share")
-    async def share_deck(
+    def share_deck(
         deck_id: str,
         body: dict,
         conn=Depends(get_conn),
@@ -888,7 +893,7 @@ def create_app(
         return {"deck_id": deck_id, "account_id": other}
 
     @app.delete("/api/decks/{deck_id}/share/{other}")
-    async def unshare_deck(
+    def unshare_deck(
         deck_id: str,
         other: str,
         conn=Depends(get_conn),
@@ -910,7 +915,7 @@ def create_app(
         return {"deck_id": deck_id, "account_id": other, "shared": False}
 
     @app.get("/api/leaderboard")
-    async def read_leaderboard(
+    def read_leaderboard(
         days: int = social.DEFAULT_WINDOW_DAYS,
         at: str | None = None,
         conn=Depends(get_conn),
@@ -919,7 +924,7 @@ def create_app(
         return social.leaderboard(conn, account.id, days=max(1, days), at=_at(at))
 
     @app.get("/api/decks/{deck_id}/compare")
-    async def compare_deck(
+    def compare_deck(
         deck_id: str,
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -928,7 +933,7 @@ def create_app(
         return social.compare(conn, account.id, deck_id)
 
     @app.get("/api/me/activity")
-    async def read_activity(
+    def read_activity(
         tz_offset: int = Query(default=0),
         conn=Depends(get_conn),
         account: identity.Account = Depends(account_of),
@@ -938,7 +943,7 @@ def create_app(
         return study.activity(conn, account.id, tz_offset_minutes=tz_offset)
 
     @app.get("/api/jobs/{job_id}/lessons")
-    async def read_lessons(
+    def read_lessons(
         job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """Everything this job taught, in the order the plan put its topics."""
@@ -946,7 +951,7 @@ def create_app(
         return {"job_id": job_id, "lessons": jobs.load_lessons(conn, job_id)}
 
     @app.get("/api/jobs/{job_id}/topics/{topic_id}/lesson")
-    async def read_lesson(
+    def read_lesson(
         job_id: str,
         topic_id: str,
         conn=Depends(get_conn),
@@ -959,7 +964,7 @@ def create_app(
         return lesson
 
     @app.get("/api/jobs/{job_id}/cards")
-    async def read_cards(job_id: str, conn=Depends(get_conn)):
+    def read_cards(job_id: str, conn=Depends(get_conn)):
         if jobs.load_job(conn, job_id) is None:
             raise HTTPException(status_code=404, detail="job not found")
         cards = jobs.load_cards(conn, job_id)
@@ -981,7 +986,7 @@ def create_app(
         }
 
     @app.post("/api/jobs/{job_id}/cards/reject")
-    async def reject_cards(
+    def reject_cards(
         job_id: str,
         body: dict,
         conn=Depends(get_conn),
@@ -994,7 +999,7 @@ def create_app(
         return {"job_id": job_id, "rejected": dropped}
 
     @app.post("/api/jobs/{job_id}/cards/accept")
-    async def accept_cards(
+    def accept_cards(
         job_id: str,
         body: dict,
         conn=Depends(get_conn),
@@ -1007,7 +1012,7 @@ def create_app(
         return {"job_id": job_id, "accepted": marked}
 
     @app.get("/api/jobs/{job_id}/diff")
-    async def read_diff(
+    def read_diff(
         job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
     ):
         """What downloading now would do to the user's collection."""
@@ -1027,7 +1032,7 @@ def create_app(
         }
 
     @app.get("/api/jobs/{job_id}/deck.apkg")
-    async def download_deck(
+    def download_deck(
         job_id: str,
         update: bool = False,
         skip: list[str] = Query(default=[]),
