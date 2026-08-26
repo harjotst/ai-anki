@@ -115,11 +115,18 @@ function upgrade(plain: string): Piece[] {
 
 export function sciPieces(text: string): Piece[] {
   const pieces: Piece[] = [];
-  // Only spans with math structure are formulas; "$5, then $6" is money.
-  const parts = text.split(/\$([^$]*[_^\\][^$]*)\$/g);
+  // Every $...$ pair is considered; what it MEANS depends on its body.
+  // Math structure (_ ^ \) renders as a formula. A spaceless body with a
+  // letter — $ATP/ADP$, $NADH$ — is notation the model wrapped without any
+  // structure, and the dollars come off. Anything else is money: "$5, then
+  // $6" round-trips untouched.
+  const parts = text.split(/\$([^$\n]+)\$/g);
   parts.forEach((part, index) => {
-    if (index % 2 === 1) pieces.push(...mathPieces(part));
-    else pieces.push(...upgrade(part));
+    if (index % 2 === 1) {
+      if (/[_^\\]/.test(part)) pieces.push(...mathPieces(part));
+      else if (!/\s/.test(part) && /[A-Za-z]/.test(part)) pieces.push(...upgrade(part));
+      else pieces.push(...upgrade("$" + part + "$"));
+    } else pieces.push(...upgrade(part));
   });
   return pieces.filter((piece) => piece.text.length > 0);
 }
