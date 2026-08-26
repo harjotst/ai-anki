@@ -348,7 +348,22 @@ def connect(url: str | None = None) -> psycopg.Connection:
     explicitly when something must be atomic -- the same contract the SQLite
     module had, so `db.transaction` still means what it meant.
     """
-    return psycopg.connect(url or dsn(), autocommit=True, row_factory=dict_row)
+    return psycopg.connect(
+        url or dsn(),
+        autocommit=True,
+        row_factory=dict_row,
+        # A database across the internet can silently lose a TCP connection;
+        # a blocking read on the dead socket then hangs forever — observed
+        # freezing the whole server mid-read against the hosted database.
+        # Keepalives notice the corpse in ~30s and error, which the screens
+        # know how to show; a hang, nobody can show.
+        connect_timeout=10,
+        options="-c statement_timeout=30000",
+        keepalives=1,
+        keepalives_idle=10,
+        keepalives_interval=10,
+        keepalives_count=3,
+    )
 
 
 @contextmanager
