@@ -5,7 +5,7 @@ import { type Href, useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useState } from "react";
 import { View } from "react-native";
 import { cached, dropCache, dueCounts } from "../../lib/data";
-import { upload } from "../../lib/session";
+import { uploadFile } from "../../lib/session";
 import { space } from "../../theme";
 import { Cap, CardBox, Button, ErrorCard, IconBtn, NavRow, Pill, Screen, Skeleton, T, useToast } from "../../ui";
 
@@ -49,13 +49,9 @@ export default function Decks() {
     }
     setImporting(true);
     try {
-      const body = new FormData();
-      body.append("file", {
-        uri: asset.uri,
-        name: asset.name,
-        type: "application/octet-stream",
-      } as any);
-      const result = await upload("/api/decks/import", body);
+      const result = await uploadFile("/api/decks/import", asset.uri, {
+        mimeType: "application/octet-stream",
+      });
       dropCache("/api");
       await load();
       toast(`${result.deck_name}: ${result.cards} cards imported`);

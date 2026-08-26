@@ -247,15 +247,33 @@ export async function api(path: string, options: RequestInit = {}) {
 }
 
 /** Multipart uploads must not carry a JSON content-type. */
-export async function upload(path: string, body: FormData) {
+/** One file, multipart. Not fetch + FormData: the runtime's fetch refuses
+ *  React Native's {uri, name, type} file parts ("Unsupported FormDataPart
+ *  implementation"), so uploads go through the file-system uploader, which
+ *  streams straight from the file's URI. */
+export async function uploadFile(
+  path: string,
+  fileUri: string,
+  options: { mimeType?: string; parameters?: Record<string, string> } = {}
+) {
+  const { File, UploadType } = await import("expo-file-system");
   const token = await accessToken();
-  const response = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    body,
+  const result = await new File(fileUri).upload(`${BASE}${path}`, {
+    uploadType: UploadType.MULTIPART,
+    fieldName: "file",
+    mimeType: options.mimeType,
+    parameters: options.parameters,
     headers: token ? { authorization: `Bearer ${token}` } : {},
   });
-  const payload = await response.json().catch(() => ({} as any));
-  if (!response.ok) throw new Error(payload.detail || "upload failed");
+  let payload: any = {};
+  try {
+    payload = JSON.parse(result.body || "{}");
+  } catch {
+    payload = {};
+  }
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(payload.detail || `upload failed (${result.status})`);
+  }
   return payload;
 }
 

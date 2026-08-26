@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cached, dropCache } from "../../lib/data";
-import { api, upload } from "../../lib/session";
+import { api, uploadFile } from "../../lib/session";
 import { radius, space, target, usePalette } from "../../theme";
 import { Button, Cap, ErrorCard, Icon, IconBtn, Sheet, T } from "../../ui";
 
@@ -63,14 +63,10 @@ export default function NewJob() {
       for (const file of files) {
         let jobId = created.current.get(file.uri);
         if (!jobId) {
-          const body = new FormData();
-          body.append("file", {
-            uri: file.uri,
-            name: file.name,
-            type: file.mimeType || "application/octet-stream",
-          } as any);
-          if (targetDeck) body.append("deck_id", targetDeck);
-          const { job_id } = await upload("/api/jobs", body);
+          const { job_id } = await uploadFile("/api/jobs", file.uri, {
+            mimeType: file.mimeType || "application/octet-stream",
+            parameters: targetDeck ? { deck_id: targetDeck } : undefined,
+          });
           jobId = job_id as string;
           created.current.set(file.uri, jobId);
         }
