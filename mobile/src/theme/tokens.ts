@@ -113,6 +113,13 @@ export const tokens = {
   "target": {
     "min": 44,
     "rating": 48
+  },
+  "brand": {
+    "_": "Identity colors owned by other companies' sign-in buttons — fixed by their brand guidelines, not by our palette.",
+    "googleBlue": "#4285F4",
+    "googleGreen": "#34A853",
+    "googleYellow": "#FBBC05",
+    "googleRed": "#EA4335"
   }
 } as const;
 export type Tokens = typeof tokens;

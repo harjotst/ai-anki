@@ -182,6 +182,26 @@ export async function signInWithGoogle() {
   throw new Error("The sign-in redirect carried no session.");
 }
 
+export async function signInWithApple() {
+  const AppleAuthentication = await import("expo-apple-authentication");
+  const client = requireAuth();
+  const credential = await AppleAuthentication.signInAsync({
+    requestedScopes: [
+      AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+      AppleAuthentication.AppleAuthenticationScope.EMAIL,
+    ],
+  });
+  if (!credential.identityToken) throw new Error("Apple returned no identity token.");
+  // The identity token goes straight to the auth provider — no browser
+  // round-trip; Apple's own sheet was the whole ceremony.
+  const { error } = await client.auth.signInWithIdToken({
+    provider: "apple",
+    token: credential.identityToken,
+  });
+  if (error) throw new Error(error.message);
+  await AsyncStorage.removeItem(SIGNED_OUT_KEY);
+}
+
 // --- calls ---------------------------------------------------------------
 
 async function call(path: string, options: RequestInit, retrying = false): Promise<Response> {
