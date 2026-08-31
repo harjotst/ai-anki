@@ -277,6 +277,27 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"deck_id": deck_id}
 
+    @app.delete("/api/decks/{deck_id}")
+    def delete_deck(
+        deck_id: str,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
+        """Remove a deck for good — cards, lessons, runs, memberships.
+
+        Owner only: a recipient losing interest unshares themselves; they do
+        not take the author's material down. The review log survives for
+        everyone, because it records work that actually happened.
+        """
+        if not ledger.deck_exists(conn, deck_id, account.id):
+            raise HTTPException(status_code=404, detail="no such deck")
+        if not ledger.owns_deck(conn, deck_id, account.id):
+            raise HTTPException(
+                status_code=403, detail="only the owner can delete this deck"
+            )
+        ledger.delete_deck(conn, deck_id)
+        return {"deck_id": deck_id, "deleted": True}
+
     @app.get("/api/jobs/{job_id}")
     def read_job(
         job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)

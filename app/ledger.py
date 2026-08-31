@@ -69,6 +69,29 @@ def create_deck(conn: psycopg.Connection, name: str, account_id: str | None) -> 
     return deck_id
 
 
+def delete_deck(conn: psycopg.Connection, deck_id: str) -> None:
+    """Remove a deck and everything the application shows for it, for everyone.
+
+    The review log stays. It records work people actually did, every
+    leaderboard has already counted it, and the append-only promise is what
+    keeps those numbers recomputable — deleting a deck must not rewrite
+    anybody's history, including a recipient's.
+
+    The jobs go with the deck, and their api_call rows with them, which
+    forgets what those runs cost. Accepted knowingly: budgets are daily
+    windows, and someone destroying their own decks to reset one is not the
+    attacker the budget exists to stop.
+    """
+    with db.transaction(conn):
+        conn.execute("DELETE FROM study_card WHERE deck_id = %s", (deck_id,))
+        conn.execute("DELETE FROM deck_member WHERE deck_id = %s", (deck_id,))
+        conn.execute("DELETE FROM card WHERE deck_id = %s", (deck_id,))
+        # Cascades take the rest of each run: sources, topics, lessons,
+        # events, api calls, and any cards still keyed only by job.
+        conn.execute("DELETE FROM job WHERE deck_id = %s", (deck_id,))
+        conn.execute("DELETE FROM deck WHERE id = %s", (deck_id,))
+
+
 def owns_deck(conn: psycopg.Connection, deck_id: str, account_id: str | None) -> bool:
     """Whoever uploaded the material. They alone may rename it, add to it, or
     hand it to somebody else."""

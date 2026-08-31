@@ -32,11 +32,25 @@ export default function DeckDetail() {
   const [segment, setSegment] = useState("topics");
   const [cards, setCards] = useState<any[] | null>(null);
   const [search, setSearch] = useState("");
-  const [menu, setMenu] = useState<null | "dots" | "rename" | "share">(null);
+  const [menu, setMenu] = useState<null | "dots" | "rename" | "share" | "delete">(null);
   const [editing, setEditing] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [studyBusy, setStudyBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const removeDeck = async () => {
+    setDeleting(true);
+    try {
+      await api(`/api/decks/${id}`, { method: "DELETE" });
+      dropCache("/api");
+      toast("Deck deleted");
+      router.replace("/(tabs)/decks" as Href);
+    } catch (problem: any) {
+      toast(problem.message);
+      setDeleting(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setError(null);
@@ -301,6 +315,26 @@ export default function DeckDetail() {
       {menu === "dots" && (
         <Sheet onClose={() => setMenu(null)}>
           <Button title="Rename" kind="ghost" onPress={() => setMenu("rename")} />
+          <Button title="Delete deck" kind="ghost" onPress={() => setMenu("delete")} />
+        </Sheet>
+      )}
+      {menu === "delete" && (
+        <Sheet onClose={() => setMenu(null)}>
+          <T v="heading">Delete this deck?</T>
+          <T v="secondary">
+            “{deck.name}” goes away for everyone it is shared with — all{" "}
+            {deck.card_count} cards, every lesson, its whole upload history.
+            Reviews already done stay counted. This cannot be undone.
+          </T>
+          <View style={{ flexDirection: "row", gap: space[2] }}>
+            <Button title="Cancel" kind="ghost" style={{ flex: 1 }} onPress={() => setMenu(null)} />
+            <Button
+              title={deleting ? "Deleting…" : "Delete deck"}
+              style={{ flex: 1, backgroundColor: palette.danger }}
+              disabled={deleting}
+              onPress={removeDeck}
+            />
+          </View>
         </Sheet>
       )}
       {menu === "rename" && (
