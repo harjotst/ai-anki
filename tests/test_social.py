@@ -26,7 +26,9 @@ from datetime import datetime, timedelta, timezone
 from tests.conftest import SOMEBODY_ELSE, TESTER
 from tests.test_study import answer, due, studied_deck
 
-NOW = datetime(2026, 8, 21, 9, 0, tzinfo=timezone.utc)
+# Anchored to the real clock for the same reason test_study's NOW is: the
+# ranking window ends at actual now, and a pinned date ages out of it.
+NOW = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)
 A_THIRD_PERSON = "00000000-0000-0000-0000-000000000003"
 
 

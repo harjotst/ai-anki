@@ -24,7 +24,11 @@ from tests.test_generation import CELL_CARDS
 from tests.test_lessons import LESSON
 from tests.test_planning import PLAN, upload
 
-NOW = datetime(2026, 8, 21, 9, 0, tzinfo=timezone.utc)
+# Anchored to the real clock, not a calendar date: scheduling and the
+# leaderboard window measure against actual now, so a pinned date quietly
+# starts failing the day it drifts out of range — observed 2026-08-31, when
+# an "easy" answer pinned ten days back had already come due again.
+NOW = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)
 
 
 def studied_deck(client, claude):
