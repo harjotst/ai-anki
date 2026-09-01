@@ -23,11 +23,6 @@ const DETAIL_WORDS: Record<string, string> = {
   "5": "Exhaustive — everything the material commits to.",
 };
 
-// The picker's cache copy is named by UUID; the asset's own name is the one
-// the user picked. Cleaned the same way the server cleans it, for the
-// deck-name placeholder only — the server remains the authority.
-const cleanName = (filename?: string | null) =>
-  (filename || "").replace(/\.[^.]+$/, "").replace(/[_\s]+/g, " ").trim();
 
 export default function NewJob() {
   const router = useRouter();
@@ -168,13 +163,21 @@ export default function NewJob() {
             </Cap>
           )}
           {deckId === "" && (
-            <TextInput
-              value={deckName}
-              onChangeText={setDeckName}
-              placeholder={cleanName(files[0]?.name) || "Deck name (from the file if blank)"}
-              placeholderTextColor={palette.muted}
-              style={[fieldRow, { color: palette.text, fontSize: 16, fontWeight: "600", paddingVertical: 12 }]}
-            />
+            <>
+              <TextInput
+                value={deckName}
+                onChangeText={setDeckName}
+                placeholder="Name this deck (required)"
+                placeholderTextColor={palette.muted}
+                style={[fieldRow, { color: palette.text, fontSize: 16, fontWeight: "600", paddingVertical: 12 }]}
+              />
+              {!deckName.trim() && (
+                <Cap>
+                  A short name beats the filename — “Antibiotics”, not the
+                  whole PowerPoint title.
+                </Cap>
+              )}
+            </>
           )}
         </View>
 
@@ -235,7 +238,7 @@ export default function NewJob() {
 
         {error && <ErrorCard message={error} onRetry={send} />}
         <Button title={busy ? "Uploading…" : "Upload & plan"} onPress={send}
-          disabled={!files.length || busy} />
+          disabled={!files.length || busy || (deckId === "" && !deckName.trim())} />
       </ScrollView>
 
       {choosing && (

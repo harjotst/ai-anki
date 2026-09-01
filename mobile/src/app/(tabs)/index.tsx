@@ -5,9 +5,9 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cached, dueCounts, localDay, streakFrom } from "../../lib/data";
-import { deckStillForming, LIVE_STATES, useLiveJobs } from "../../lib/live-jobs";
+import { LIVE_STATES, useLiveJobs } from "../../lib/live-jobs";
 import { radius, space, target, usePalette } from "../../theme";
-import { Button, Cap, CardBox, ErrorCard, IconBtn, NavRow, Pill, Skeleton, T } from "../../ui";
+import { Button, Cap, CardBox, ErrorCard, IconBtn, Skeleton, T } from "../../ui";
 import { JobProgressCard } from "../../ui/job-progress";
 import { Mascot } from "../../ui/mascot";
 
@@ -179,11 +179,6 @@ export default function Today() {
       (job: any) => job.state !== "complete" && job.state !== "cancelled"
     );
     const firstRun = decks.length === 0 && openJobs.length === 0;
-    const sorted = [...decks]
-      // A deck still being made is the job's business: its card shows above,
-      // says what is happening, and opens the run — never an empty shell.
-      .filter((deck) => !deckStillForming(deck, jobsNow))
-      .sort((a, b) => (counts[b.deck_id] || 0) - (counts[a.deck_id] || 0));
 
     return (
       <>
@@ -255,29 +250,11 @@ export default function Today() {
           </CardBox>
         )}
 
-        {sorted.length > 0 && (
-          <View style={{ gap: space[2] }}>
-            {sorted.map((deck) => (
-              <NavRow key={deck.deck_id} onPress={() => router.push(`/deck/${deck.deck_id}`)}
-                right={
-                  writing[deck.deck_id] ? (
-                    <Pill text="writing…" accent />
-                  ) : (counts[deck.deck_id] || 0) > 0 ? (
-                    <Pill text={`${counts[deck.deck_id]} due`} accent />
-                  ) : null
-                }>
-                <T v="body" style={{ fontWeight: "600" }}>{deck.name}</T>
-                <Cap>
-                  {deck.card_count} cards
-                  {deck.shared_with_me ? ` · from ${deck.owner_name}` : ""}
-                </Cap>
-              </NavRow>
-            ))}
-          </View>
-        )}
       </>
     );
   };
+  // Decks deliberately do not appear here. Today answers one question — is
+  // the streak safe and what is due — and the library lives on its own tab.
 
   return (
     <ScrollView
