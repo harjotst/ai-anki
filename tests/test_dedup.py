@@ -41,7 +41,7 @@ def card(front, back="."):
 def run(client, claude, first, second):
     claude.counts_tokens(1000).replies_json(PLAN)
     job_id = client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
     claude.replies_json({"cards": first}).replies_json({"cards": second})
@@ -52,7 +52,7 @@ def run(client, claude, first, second):
 def test_the_plan_gives_each_topic_claims_it_alone_owns(client, claude):
     claude.counts_tokens(1000).replies_json(PLAN)
     job_id = client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
 

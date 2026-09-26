@@ -41,19 +41,15 @@ app = create_app(
     ),
 )
 
-# Hand any local client a signed token, so neither the browser nor the phone
-# needs one pasted in. Development only: this file never runs in production,
+# Hand any local client a signed token, so the phone never needs one pasted
+# in. Development only: this file never runs in production,
 # and the token is only good against this process's throwaway key anyway.
 @app.get("/dev/token")
 def dev_token():
     from fastapi.responses import JSONResponse
 
-    # no-store, because in real mode this same path is answered by the SPA
-    # catch-all and a cached copy of that answer breaks the dev sign-in.
+    # no-store: a cached copy of a stale answer breaks the dev sign-in.
     return JSONResponse({"token": token()}, headers={"cache-control": "no-store"})
-
-# Registered after the SPA catch-all, which would otherwise swallow it.
-app.router.routes.insert(0, app.router.routes.pop())
 
 if __name__ == "__main__":
     # All interfaces, not loopback: a real phone on the same Wi-Fi reaches

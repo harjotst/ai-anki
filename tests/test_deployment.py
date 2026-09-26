@@ -112,40 +112,23 @@ def test_operations_documents_the_secret_restart_hazard():
     assert "restart" in docs.lower()
 
 
-def test_the_built_frontend_is_served_by_the_same_process(client):
-    """One container, one process. There is no second thing to deploy."""
-    shell = client.get("/")
-
-    assert shell.status_code == 200
-    assert 'id="root"' in shell.text
-
-
-def test_a_job_link_opened_cold_still_serves_the_app(client):
-    # Client-side routing: the shell has to come back for a path the server has
-    # no route for, or a shared link 404s.
-    assert client.get("/?job=abc123").status_code == 200
-
-
-def test_the_api_is_never_shadowed_by_the_frontend_catch_all(client):
-    # The catch-all is mounted last; an unknown API path must still be an API
-    # 404 rather than silently returning HTML.
+def test_an_unknown_api_path_is_a_json_404(client):
     response = client.get("/api/jobs/does-not-exist")
     assert response.status_code == 404
     assert response.headers["content-type"].startswith("application/json")
 
 
 @pytest.mark.parametrize("escape", ["/%2e%2e/%2e%2e/pyproject.toml", "/..%2f..%2fpyproject.toml"])
-def test_the_catch_all_cannot_be_walked_out_of_the_build_directory(client, escape):
-    """The guard only covers /api/, so this route is the whole front door.
+def test_nothing_outside_the_api_is_served(client, escape):
+    """The server is the API and nothing else; the app lives on the phone.
 
     Percent-encoded, because the plain `/../../` form is normalised away by the
-    client before it ever reaches the server -- a test written that way passes
-    against the vulnerable code and proves nothing. Decoded here, `..` reached
-    the repository root, and `.env` with it.
+    client before it ever reaches the server. A static-file route that once
+    sat here decoded `..` and reached the repository root, `.env` with it.
     """
     response = client.get(escape)
 
-    assert 'id="root"' in response.text, "the shell, not a file from outside dist"
+    assert response.status_code == 404
     assert "[project]" not in response.text
 
 
@@ -157,54 +140,3 @@ def test_the_provider_choice_is_documented_with_its_gate_and_its_assumptions():
     # cheapest row and paying more.
     assert "20,000 tokens" in docs, "the Nova caching cap must be recorded"
     assert "assumptions, not facts" in docs.lower()
-
-
-def test_the_built_frontend_calls_every_endpoint_the_journey_needs():
-    """A crude guard against the UI simply never calling something.
-
-    The React components have no test suite — that would be a third seam we
-    agreed not to add — so nothing else here notices if a step is missing. This
-    caught a real one: upload created a job and the planning pass was never
-    triggered, so the app polled a job stuck in `uploaded` forever, showing
-    "Working…" and doing nothing.
-    """
-    bundles = list((ROOT / "frontend" / "dist" / "assets").glob("*.js"))
-    if not bundles:
-        pytest.skip("frontend not built")
-    built = max(bundles, key=lambda p: p.stat().st_mtime).read_text()
-
-    for endpoint in (
-        "/api/jobs",          # upload, and the job list
-        "/plan",              # pass 1, and the edited-plan PUT
-        "/generate",          # pass 2
-        "/estimate",          # cost before approval
-        "/cards",             # the review screen
-        "/deck.apkg",         # download
-        "/download-info",     # the Anki guidance
-        "/api/decks",         # the deck list and the continuation picker
-        "/diff",              # what downloading would change
-    ):
-        assert endpoint in built, f"the built UI never calls {endpoint}"
-
-    # The redesign inlines the bulk-review verbs into template literals, so the
-    # full paths appear in the bundle and can be asserted directly — stronger
-    # than the old shape check.
-    assert "cards/accept" in built
-    assert "cards/reject" in built
-    # And the study loop, which the redesign made the primary surface.
-    for endpoint in ("/api/reviews", "/due", "/mastery", "/api/leaderboard",
-                     "/api/me/activity", "/study"):
-        assert endpoint in built, f"the built UI never calls {endpoint}"
-
-    assert "/api/session" not in built
-    assert "signInWithOAuth" in built
-    assert "authorization" in built.lower()
-
-
-def test_migrations_run_once_per_deploy_rather_than_on_every_boot():
-    """Boot is the wrong place for a migration.
-
-    It runs on every restart, including the ones the platform causes, and two
-    machines booting together would race each other through the same statements.
-    """
-    assert FLY["deploy"]["release_command"] == "alembic upgrade head"

@@ -1,6 +1,5 @@
-// Shared primitives: the same visual vocabulary as the web's ui.jsx and
-// style.css, rendered natively. Icons are the identical stroke paths on the
-// same 24px grid — no emoji, no icon font.
+// Shared primitives: text, surfaces, controls, sheets, toasts. Icons are
+// stroke paths on a 24px grid — no emoji, no icon font.
 import React, {
   createContext, useCallback, useContext, useEffect, useRef, useState,
 } from "react";
@@ -8,7 +7,7 @@ import {
   ColorValue, Modal, Pressable, ScrollView, Text, View, ViewStyle, TextStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Svg, { Circle, Path, Rect } from "react-native-svg";
+import Svg, { Circle, Path } from "react-native-svg";
 import { font, radius, space, target, usePalette } from "../theme";
 import { Sci } from "./sci";
 
@@ -22,24 +21,10 @@ const PATHS: Record<string, React.ReactNode> = {
   chevL: <Path d="M15 6l-6 6 6 6" />,
   chevD: <Path d="M6 9l6 6 6-6" />,
   check: <Path d="M5 12.5l4.5 4.5L19 7.5" />,
-  today: (
-    <>
-      <Rect x="4" y="5" width="16" height="16" rx="2.5" />
-      <Path d="M4 10h16M8 3v4M16 3v4" />
-      <Path d="M9 15.5l2 2 4-4" />
-    </>
-  ),
   decks: (
     <>
       <Path d="M12 3l9 5-9 5-9-5 9-5z" />
       <Path d="M3 13l9 5 9-5" />
-    </>
-  ),
-  board: <Path d="M5 20v-8M12 20V5M19 20v-5" />,
-  you: (
-    <>
-      <Circle cx="12" cy="8.5" r="3.5" />
-      <Path d="M5 20c1.4-3.2 4-4.8 7-4.8s5.6 1.6 7 4.8" />
     </>
   ),
   dots: (
@@ -47,14 +32,6 @@ const PATHS: Record<string, React.ReactNode> = {
       <Circle cx="5" cy="12" r="1.1" fill="currentColor" stroke="none" />
       <Circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
       <Circle cx="19" cy="12" r="1.1" fill="currentColor" stroke="none" />
-    </>
-  ),
-  share: (
-    <>
-      <Circle cx="6" cy="12" r="2.4" />
-      <Circle cx="17.5" cy="6" r="2.4" />
-      <Circle cx="17.5" cy="18" r="2.4" />
-      <Path d="M8.2 10.8l7-3.6M8.2 13.2l7 3.6" />
     </>
   ),
   download: (
@@ -67,12 +44,6 @@ const PATHS: Record<string, React.ReactNode> = {
     <>
       <Path d="M7 3.5h7l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20V5a1.5 1.5 0 0 1 1-1.4z" />
       <Path d="M12 11v6M9 14h6" />
-    </>
-  ),
-  copy: (
-    <>
-      <Rect x="9" y="9" width="11" height="11" rx="2" />
-      <Path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" />
     </>
   ),
   edit: <Path d="M4 20l1-4L17.5 3.5a2.1 2.1 0 0 1 3 3L8 19l-4 1z" />,

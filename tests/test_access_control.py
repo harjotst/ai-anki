@@ -17,7 +17,7 @@ from tests.conftest import SOMEBODY_ELSE, TESTER
 
 
 def upload(client):
-    return client.post("/api/jobs", files={"file": ("a.txt", b"Some material.", "text/plain")})
+    return client.post("/api/jobs", files={"file": ("a.txt", b"Some material.", "text/plain")}, data={"deck_name": "Lecture"})
 
 
 # --- the door ------------------------------------------------------------
@@ -204,7 +204,7 @@ def test_two_subjects_are_two_people_however_alike_they_look(client, pg_dsn):
 
 
 def test_only_the_author_edits_deletes_or_rerolls_a_card(boot, claude):
-    """A card uuid travels — due lists carry them, share recipients see them.
+    """A card uuid travels — due lists carry them, and so do logs and links.
     Holding one must grant nothing: these three endpoints used to take any
     authenticated account, which let a stranger rewrite an owner's card, or
     spend the owner's budget re-rolling it."""
@@ -222,18 +222,6 @@ def test_only_the_author_edits_deletes_or_rerolls_a_card(boot, claude):
             machine.post(f"/api/cards/{card['card_uuid']}/reroll"),
         ):
             assert attempt.status_code == 404, attempt.text
-
-        # Being shared the deck grants studying, never authorship.
-        code = machine.get("/api/me").json()["friend_code"]
-        machine.sign_in_as(TESTER)
-        machine.post("/api/friends", json={"code": code})
-        machine.sign_in_as(SOMEBODY_ELSE)
-        machine.post(f"/api/friends/{TESTER}/accept")
-        machine.sign_in_as(TESTER)
-        machine.post(f"/api/decks/{deck_id}/share", json={"account_id": SOMEBODY_ELSE})
-        machine.sign_in_as(SOMEBODY_ELSE)
-        still = machine.patch(f"/api/cards/{card['card_uuid']}", json={"front": "mine", "back": "x"})
-        assert still.status_code == 404, still.text
 
         # And the author still can.
         machine.sign_in_as(TESTER)

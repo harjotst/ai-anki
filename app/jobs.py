@@ -191,19 +191,6 @@ def record_topic_event(conn: psycopg.Connection, job_id: str, topic_id: str) -> 
     )
 
 
-def deck_name_from(filename: str) -> str:
-    """A human name for a deck, from the file that started it.
-
-    `safe_filename` is for the disk; its underscores and extension are
-    storage armour, not a title. People saw decks called
-    Introduction_to_the_Microbial_World_-_Honsa__PowerPoint_.pdf — the
-    filename cleaned up is the best default we have, and it is renameable.
-    """
-    stem = Path(filename).stem
-    name = re.sub(r"[_\s]+", " ", stem).strip(" .")
-    return name or "New deck"
-
-
 def create_job(
     conn: psycopg.Connection,
     data_dir: Path,
@@ -216,6 +203,12 @@ def create_job(
     guidance: str | None = None,
     detail_level: int | None = None,
 ) -> str:
+    """Start a Job against `deck_id`, or against a new deck named `deck_name`.
+
+    A new deck without a usable name raises `ledger.DeckNameRejected` before
+    anything is written.
+    """
+    new_deck_name = ledger.clean_deck_name(deck_name) if deck_id is None else None
     job_id = uuid.uuid4().hex
     stored_name = safe_filename(filename)
     job_dir = data_dir / job_id
@@ -230,13 +223,7 @@ def create_job(
         # A Job always runs against a Deck. Without one named, it starts a new
         # lineage; naming one continues the deck the user is already building.
         if deck_id is None:
-            deck_id = ledger.create_deck(
-                conn,
-                # The user's own name wins; the file's cleaned name is the
-                # default, never the storage name.
-                name=(deck_name or "").strip() or deck_name_from(filename),
-                account_id=account_id,
-            )
+            deck_id = ledger.create_deck(conn, name=new_deck_name, account_id=account_id)
         conn.execute(
             "INSERT INTO job (id, account_id, deck_id, state, guidance, detail_level)"
             " VALUES (%s, %s, %s, %s, %s, %s)",
@@ -984,8 +971,7 @@ def settle_job(conn: psycopg.Connection, job_id: str) -> str:
         # A finished deck is studiable the moment it is finished. The deck
         # screen reads the study projection, so without this a 132-card deck
         # read as "no cards yet" until a button nobody knew about was pressed
-        # (observed live 2026-08-26). Enrolment is idempotent and additive;
-        # recipients of a shared deck still choose for themselves.
+        # (observed live 2026-08-26). Enrolment is idempotent and additive.
         job = load_job(conn, job_id)
         if job and job.deck_id and job.account_id:
             from app import study

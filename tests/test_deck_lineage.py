@@ -42,7 +42,7 @@ SAME_CARD_PLUS_A_NEW_ONE = {
 
 def run(client, claude, cards=FIRST_CARDS, deck_id=None):
     claude.counts_tokens(1000).replies_json(PLAN)
-    body = {"deck_id": deck_id} if deck_id else {}
+    body = {"deck_id": deck_id} if deck_id else {"deck_name": "Lecture"}
     job_id = client.post(
         "/api/jobs",
         files={"file": ("lecture.txt", b"Material.", "text/plain")},

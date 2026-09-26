@@ -9,7 +9,7 @@ facts that have already happened. Merging two logs is their union, deduplicated
 by an id the client chose — no last-write-wins, no vector clocks, no merge
 policy to get subtly wrong at three in the morning.
 
-*Leaderboards are recomputable rather than merely stored.* A bug in aggregation
+*Statistics are recomputable rather than merely stored.* A bug in aggregation
 becomes a re-run instead of lost history, and a number nobody can recompute is a
 number nobody should trust.
 

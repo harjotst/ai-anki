@@ -94,7 +94,7 @@ export async function flush(): Promise<void> {
       body: JSON.stringify({ reviews: batch }),
     });
     await dropByIdentity(inFlight);
-    // The server names reviews it skipped (card gone — deck unshared,
+    // The server names reviews it skipped (card gone — deck deleted,
     // card rejected). They are gone from the queue with the rest: retrying
     // them would jam everything behind rows that can never land.
     void reply;

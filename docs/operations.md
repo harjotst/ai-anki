@@ -167,8 +167,8 @@ UPDATE account SET is_admin = true WHERE email = 'someone@example.com';
 An in-app "make admin" surface is deliberately absent. It is a
 privilege-escalation feature nobody asked for.
 
-To call an admin endpoint by hand, take the access token from the browser —
-your Supabase session is in local storage — and send it as
+To call an admin endpoint by hand, take the access token from a signed-in session —
+the app keeps its Supabase session in device storage — and send it as
 `authorization: Bearer <token>`.
 
 ## Auth
@@ -260,18 +260,14 @@ fly secrets set ANTHROPIC_API_KEY=sk-ant-... \
 ```
 
 The database URL and the issuer both come from the Supabase project. The
-frontend needs its own two, at build time rather than run time, because Vite
-inlines them:
-
-```bash
-fly secrets set VITE_SUPABASE_URL="https://<project>.supabase.co" VITE_SUPABASE_ANON_KEY="<anon key>"
-```
+mobile app carries its own Supabase URL and anon key; the server serves the API
+only.
 
 ```bash
 fly deploy
 ```
 
-Then open the app and sign in with Google. Being the first account in an empty
+Then open the mobile app and sign in with Google. Being the first account in an empty
 database makes you the administrator; nothing needs seeding.
 
 ### Every deploy after that

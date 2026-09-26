@@ -1,6 +1,6 @@
 // Post-generation card review — and the moment the pipeline finally lands in
 // the product's own loop: the terminal action is "Study these now", not a
-// download. The .apkg export lives on the deck screen, web-side.
+// download. The .apkg export lives on the deck screen.
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useGoBack } from "../../../lib/nav";
 import React, { useCallback, useEffect, useRef, useState } from "react";

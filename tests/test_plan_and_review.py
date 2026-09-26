@@ -34,7 +34,7 @@ RICH_PLAN = {
 def planned(client, claude, plan=RICH_PLAN, tokens=200_000):
     claude.counts_tokens(tokens).replies_json(plan)
     job_id = client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
     return job_id
@@ -132,7 +132,7 @@ def test_a_plan_is_still_there_when_the_tab_is_reopened(boot, claude):
 def generated(client, claude):
     claude.counts_tokens(1000).replies_json(PLAN)
     job_id = client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
     claude.replies_json(

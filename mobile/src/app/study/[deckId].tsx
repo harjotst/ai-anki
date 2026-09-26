@@ -33,7 +33,6 @@ export default function Study() {
   const [pending, setPending] = useState(pendingCount());
   const [menu, setMenu] = useState<null | "overflow" | "edit" | "info">(null);
   const [error, setError] = useState<string | null>(null);
-  const [baselineKnown, setBaselineKnown] = useState<number | null>(null);
   const shownAt = useRef(Date.now());
   const deckName = useRef("");
 
@@ -67,12 +66,6 @@ export default function Study() {
       }
       setQueue(cards);
       shownAt.current = Date.now();
-      cached("/api/leaderboard", 0)
-        .then((board: any) => {
-          const me = board.rows.find((row: any) => row.is_you);
-          setBaselineKnown(me ? me.cards_known : null);
-        })
-        .catch(() => {});
     } catch (problem: any) {
       setError(problem.message);
     }
@@ -137,7 +130,7 @@ export default function Study() {
       <Skeleton h={200} />
     </View>
   );
-  if (!card) return <Complete log={log} deckId={deckId!} baselineKnown={baselineKnown} />;
+  if (!card) return <Complete log={log} deckId={deckId!} />;
 
   const done = log.length;
   const total = done + queue.length;
@@ -297,13 +290,12 @@ export function EditSheet({ card, onClose, onSaved }: { card: any; onClose: () =
   );
 }
 
-function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; baselineKnown: number | null }) {
+function Complete({ log, deckId }: { log: any[]; deckId: string }) {
   const router = useRouter();
   const goBack = useGoBack();
   const toast = useToast();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
-  const [board, setBoard] = useState<any>(null);
   const [nextDeck, setNextDeck] = useState<any>(null);
   const [missOpen, setMissOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
@@ -314,7 +306,6 @@ function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; 
       // them first, or the summary counts the pre-session world.
       await flush().catch(() => {});
       dropCache("/api");
-      api("/api/leaderboard").then(setBoard).catch(() => {});
       api("/api/decks")
         .then(async ({ decks }: any) => {
           const counts = await dueCounts(decks);
@@ -337,16 +328,13 @@ function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; 
   const totalMs = log.reduce((sum, entry) => sum + (entry.ms || 0), 0);
   const minutes = Math.floor(totalMs / 60000);
   const seconds = Math.round((totalMs % 60000) / 1000);
-  const me = board?.rows.find((row: any) => row.is_you);
-  const ahead = board?.rows.find((row: any) => !row.is_you && row.reviews > (me?.reviews ?? 0));
-  const knownDelta = me && baselineKnown != null ? me.cards_known - baselineKnown : null;
 
-  const stat = (value: any, label: string, small?: boolean) => (
+  const stat = (value: any, label: string) => (
     <View style={{
-      flexBasis: "48%", flexGrow: 1, backgroundColor: palette.sunken,
+      flex: 1, backgroundColor: palette.sunken,
       borderRadius: radius.md, padding: 14, gap: 2,
     }}>
-      <T style={{ fontSize: small ? 16 : 22, lineHeight: 26, fontWeight: "600", fontVariant: ["tabular-nums"] }}>
+      <T style={{ fontSize: 22, lineHeight: 26, fontWeight: "600", fontVariant: ["tabular-nums"] }}>
         {value}
       </T>
       <Cap>{label}</Cap>
@@ -366,19 +354,11 @@ function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; 
         <T v="title">Session complete</T>
       </View>
 
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space[2] }}>
+      <View style={{ flexDirection: "row", gap: space[2] }}>
         {stat(reviewed, "reviewed")}
         {stat(`${correct}%`, "correct")}
         {stat(`${minutes}:${String(seconds).padStart(2, "0")}`, "time")}
-        {stat(me?.streak_days ? `Day ${me.streak_days} kept` : "—", "streak", true)}
       </View>
-
-      {me && (
-        <T v="secondary" style={{ textAlign: "center", fontVariant: ["tabular-nums"] }}>
-          Known {me.cards_known}{knownDelta && knownDelta > 0 ? ` (+${knownDelta})` : ""}
-          {ahead ? ` · ${ahead.display_name || "A friend"} is ${ahead.reviews - me.reviews} reviews ahead this week` : ""}
-        </T>
-      )}
 
       {misses.length > 0 && (
         <CardBox style={{ gap: 10 }}>
@@ -407,7 +387,7 @@ function Complete({ log, deckId, baselineKnown }: { log: any[]; deckId: string; 
         ) : (
           <Button title="Done" onPress={() => goBack()} />
         )}
-        <Button title="Back to Today" kind="ghost" onPress={() => goBack()} />
+        <Button title="Back to home" kind="ghost" onPress={() => goBack()} />
       </View>
 
       {editing && (

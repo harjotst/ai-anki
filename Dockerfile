@@ -1,17 +1,6 @@
 # Python is pinned to 3.12 deliberately: the dependency set is resolved against
 # it, and a base image that drifts to 3.13 on rebuild is a deploy that fails for
 # reasons nothing in this repository changed.
-FROM node:22-slim AS frontend
-
-WORKDIR /build
-# The frontend is optional while it is being built out. Copying the manifest
-# first keeps the install layer cached against source churn.
-COPY frontend/package*.json ./frontend/
-RUN if [ -f frontend/package.json ]; then cd frontend && npm ci --no-audit --no-fund; fi
-COPY frontend/ ./frontend/
-RUN if [ -f frontend/package.json ]; then cd frontend && npm run build; else mkdir -p frontend/dist; fi
-
-
 FROM python:3.12-slim-bookworm
 
 # Debian bookworm carries glibc 2.36, which matters: the dev-only `anki` wheels
@@ -74,7 +63,6 @@ COPY app/ ./app/
 # The release command runs `alembic upgrade head` from this image.
 COPY alembic.ini ./
 COPY migrations/ ./migrations/
-COPY --from=frontend /build/frontend/dist ./frontend/dist
 
 EXPOSE 8080
 

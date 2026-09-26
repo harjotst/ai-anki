@@ -25,7 +25,7 @@ from tests.test_lessons import LESSON
 from tests.test_planning import PLAN, upload
 
 # Anchored to the real clock, not a calendar date: scheduling and the
-# leaderboard window measure against actual now, so a pinned date quietly
+# activity window measure against actual now, so a pinned date quietly
 # starts failing the day it drifts out of range — observed 2026-08-31, when
 # an "easy" answer pinned ten days back had already come due again.
 NOW = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)
@@ -160,7 +160,7 @@ def test_scheduling_can_be_thrown_away_and_rebuilt_from_the_log(client, claude, 
     """`study_card` is a projection, not a record.
 
     If this ever fails, the log has stopped being authoritative — and with it
-    go conflict-free sync, recomputable leaderboards, and any hope of changing
+    go conflict-free sync, recomputable statistics, and any hope of changing
     the scheduler later.
     """
     from app import db, study
@@ -203,7 +203,7 @@ def test_reviews_that_arrive_out_of_order_are_replayed_in_the_order_they_happene
     assert [r["rating"] for r in history] == ["again", "easy"], "replayed in event order"
 
 
-# --- what the social features will be built on ---------------------------
+# --- mastery and activity ------------------------------------------------
 
 
 def test_mastery_of_a_topic_is_the_mean_chance_of_recalling_its_cards(client, claude):
@@ -211,8 +211,8 @@ def test_mastery_of_a_topic_is_the_mean_chance_of_recalling_its_cards(client, cl
 
     Retrievability is what FSRS already computes: the probability this card
     would be recalled right now. Averaged over a topic it decays if you stop
-    studying, which is the honest answer, and it compares between two people
-    without normalising for how many cards each of them generated.
+    studying, which is the honest answer, and it compares between decks
+    without normalising for how many cards each of them holds.
     """
     deck_id, _ = studied_deck(client, claude)
     fresh = client.get(f"/api/decks/{deck_id}/mastery").json()

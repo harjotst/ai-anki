@@ -30,7 +30,7 @@ CARDS = {"cards": [{"note_type": "basic", "front": "Q?", "back": "A.",
 def run(client, claude, pause=0.0):
     claude.counts_tokens(1000).replies_json(PLAN)
     job_id = client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
     for _ in PLAN["topics"]:
@@ -80,7 +80,7 @@ def test_every_topic_still_produces_its_cards(client, claude):
 def test_one_topic_failing_does_not_take_the_others_with_it(client, claude):
     claude.counts_tokens(1000).replies_json(PLAN)
     job_id = client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
 
