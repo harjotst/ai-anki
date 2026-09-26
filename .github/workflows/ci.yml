@@ -52,7 +52,9 @@ jobs:
       # so a typo'd `auto_stop_machines` would pass here, do nothing in
       # production, and let the machine stop itself under a running job.
       - name: Validate fly.toml
-        run: fly config validate --strict
+        # `flyctl`, not the `fly` alias: the setup action no longer puts the
+        # alias on the path.
+        run: flyctl config validate --strict
 
   container:
     runs-on: ubuntu-latest
