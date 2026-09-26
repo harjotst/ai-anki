@@ -36,7 +36,10 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends postgresql-client-17
-          pg_dump --version
+          # The runner ships Postgres 16, and Debian's pg_wrapper resolves a
+          # bare `pg_dump` to it rather than to the 17 just installed.
+          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
       - name: Tests
         run: python -m pytest -q
