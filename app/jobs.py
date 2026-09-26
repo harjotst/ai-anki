@@ -677,12 +677,18 @@ def interrupt_job(conn: psycopg.Connection, job_id: str, reason: str) -> None:
     A topic still marked `running` is released with it: the checkpoint is the
     last thing this process will say, so it must not leave a topic claiming to
     be worked on by nobody. Idempotent, because both the run loop and the drain
-    that outran it may arrive here for the same job.
+    that outran it may arrive here for the same job — at the same moment, on
+    different connections. The state is read under a row lock inside the
+    transaction, so the second caller waits for the first to commit and then
+    sees `interrupted` rather than both passing the check and the second
+    tripping over the first's transition.
     """
-    row = conn.execute("SELECT state FROM job WHERE id = %s", (job_id,)).fetchone()
-    if row is None or row["state"] not in IN_FLIGHT:
-        return
     with db.transaction(conn):
+        row = conn.execute(
+            "SELECT state FROM job WHERE id = %s FOR UPDATE", (job_id,)
+        ).fetchone()
+        if row is None or row["state"] not in IN_FLIGHT:
+            return
         transition(conn, job_id, INTERRUPTED, error=reason)
         release_running_topics(conn, job_id)
 
@@ -896,15 +902,27 @@ def unfinished_topics(conn: psycopg.Connection, job_id: str) -> list[Topic]:
     return [t for t in load_topics(conn, job_id) if t.status != TOPIC_DONE]
 
 
-def start_topic(conn: psycopg.Connection, job_id: str, topic_id: str) -> None:
-    """Claim a topic before its Anthropic call, never after it."""
+def start_topic(conn: psycopg.Connection, job_id: str, topic_id: str) -> bool:
+    """Claim a topic before its model call, never after it.
+
+    Refused — returning False — once the job has stopped. The job row is locked
+    the same way `interrupt_job` locks it, so a claim racing a shutdown either
+    lands first and is released by the checkpoint, or finds the job already
+    interrupted; it never marks a topic `running` on a job nobody is running.
+    """
     with db.transaction(conn):
+        job = conn.execute(
+            "SELECT state FROM job WHERE id = %s FOR UPDATE", (job_id,)
+        ).fetchone()
+        if job is None or job["state"] not in IN_FLIGHT:
+            return False
         conn.execute(
             "UPDATE topic SET status = %s, attempt_count = attempt_count + 1"
             " WHERE job_id = %s AND topic_id = %s",
             (TOPIC_RUNNING, job_id, topic_id),
         )
         record_topic_event(conn, job_id, topic_id)
+    return True
 
 
 def fail_topic(conn: psycopg.Connection, job_id: str, topic_id: str, error: str) -> None:
