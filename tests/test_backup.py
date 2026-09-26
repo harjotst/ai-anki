@@ -51,8 +51,7 @@ def populated(pg_dsn):
     db.initialise(pg_dsn)
     conn = db.connect(pg_dsn)
     conn.execute(
-        "INSERT INTO deck (id, invite_id, name, created_at)"
-        " VALUES ('d1', NULL, 'Bio', now())"
+        "INSERT INTO deck (id, name, created_at) VALUES ('d1', 'Bio', now())"
     )
     conn.close()
     return pg_dsn
@@ -99,7 +98,7 @@ def test_a_backup_is_uploaded_under_a_key_that_sorts_by_date(populated, tmp_path
         {},
         {
             "Bucket": "ai-anki-backups",
-            "Key": "db/2026-08-21T03-00-00Z.db.gz",
+            "Key": "db/2026-08-21T03-00-00Z.dump",
             "Body": ANY,
         },
     )
@@ -109,7 +108,7 @@ def test_a_backup_is_uploaded_under_a_key_that_sorts_by_date(populated, tmp_path
         populated, tmp_path, destination, client=client, now=1787281200.0, keep_days=14
     )
 
-    assert result["key"] == "db/2026-08-21T03-00-00Z.db.gz"
+    assert result["key"] == "db/2026-08-21T03-00-00Z.dump"
     assert result["bytes"] > 0
     stub.assert_no_pending_responses()
 

@@ -8,7 +8,9 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "python-multipart>=0.0.20",
-    "anthropic>=0.40",
+    # Below 1.0: the 1.x SDK moved to httpx2 and refuses the httpx transport
+    # the test suite fakes the API at.
+    "anthropic>=0.40,<1",
     "openai>=3.3",
     # The request path borrows warm connections instead of opening one TLS
     # handshake per call — the churn is what the hosted database throttled.
