@@ -228,10 +228,8 @@ def build_lesson_request(
             else ""
         )
     )
-    # Five minutes rather than an hour, for the same reason pass 2 uses it: every
-    # topic's lesson call sends this same schema, so they share a prefix and run
-    # back to back with no human pause between them. An hour costs 2x base input
-    # against 1.25x for five minutes.
+    # Cached, for the same reason pass 2 is: every topic's lesson call sends this
+    # same schema, so they share a prefix and run back to back.
     return provider.build_request(
         system=SYSTEM,
         documents=documents,

@@ -1,7 +1,7 @@
 """Who the caller is, proved rather than asserted.
 
 The seam here is the JWKS *fetch*, and nothing else — the same choice as
-`ClaudeScript`, which fakes the Anthropic HTTP transport and leaves the real SDK
+`ModelScript`, which fakes the OpenAI HTTP transport and leaves the real SDK
 in the loop. These tests generate a real RSA keypair, publish a real JWKS
 document, and sign real tokens with it. Every line of verification runs for
 real, so a mistake in audience checking or expiry handling fails here rather

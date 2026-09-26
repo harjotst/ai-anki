@@ -3,7 +3,7 @@
 Fly SIGTERMs on deploys, secret changes, scale changes, host migrations and OOM,
 and a generation run is far longer than any drain window. These tests drive the
 whole machine — checkpoint, resume, backoff, attempt cap — through the HTTP
-boundary, faking only the Anthropic transport.
+boundary, faking only the OpenAI transport.
 """
 
 import contextlib
@@ -45,8 +45,8 @@ OVERSUBSCRIBED_PLAN = {
 LAST_TOPIC_PATH = f"Biology::Topic {BEYOND_THE_WINDOW}"
 
 
-def planned_job(client, claude, plan=PLAN):
-    claude.replies_json(plan)
+def planned_job(client, llm, plan=PLAN):
+    llm.replies_json(plan)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
     return job_id
@@ -71,12 +71,12 @@ def generate_until_killed(boot, job_id, **settings):
                 machine.post(f"/api/jobs/{job_id}/generate")
 
 
-def test_the_attempt_counter_is_committed_before_the_first_call_of_a_run(boot, claude):
+def test_the_attempt_counter_is_committed_before_the_first_call_of_a_run(boot, llm):
     with boot() as machine:
-        job_id = planned_job(machine, claude)
+        job_id = planned_job(machine, llm)
         assert machine.get(f"/api/jobs/{job_id}").json()["attempt_count"] == 0
 
-    claude.dies()
+    llm.dies()
     generate_until_killed(boot, job_id)
 
     with boot() as restarted:
@@ -88,11 +88,11 @@ def test_the_attempt_counter_is_committed_before_the_first_call_of_a_run(boot, c
         assert restarted.get(f"/api/jobs/{job_id}/cards").json()["cards"] == []
 
 
-def test_a_restart_marks_a_job_whose_worker_is_gone_as_interrupted(boot, claude):
+def test_a_restart_marks_a_job_whose_worker_is_gone_as_interrupted(boot, llm):
     with boot() as machine:
-        job_id = planned_job(machine, claude)
+        job_id = planned_job(machine, llm)
 
-    claude.replies_json(GLYCOLYSIS_CARDS).dies()
+    llm.replies_json(GLYCOLYSIS_CARDS).dies()
     generate_until_killed(boot, job_id)
 
     with boot() as restarted:
@@ -104,15 +104,15 @@ def test_a_restart_marks_a_job_whose_worker_is_gone_as_interrupted(boot, claude)
         assert len(restarted.get(f"/api/jobs/{job_id}/cards").json()["cards"]) == 2
 
 
-def test_a_resume_runs_only_the_topics_that_did_not_finish(boot, claude):
+def test_a_resume_runs_only_the_topics_that_did_not_finish(boot, llm):
     with boot() as machine:
-        job_id = planned_job(machine, claude)
+        job_id = planned_job(machine, llm)
 
-    claude.replies_json(GLYCOLYSIS_CARDS).dies()
+    llm.replies_json(GLYCOLYSIS_CARDS).dies()
     generate_until_killed(boot, job_id)
-    spent = len(claude.calls_for("cards"))
+    spent = len(llm.calls_for("cards"))
 
-    claude.replies_json(CELL_CARDS)
+    llm.replies_json(CELL_CARDS)
     with boot(resume_backoff_seconds=0) as restarted:
         response = restarted.post(f"/api/jobs/{job_id}/generate")
 
@@ -123,8 +123,8 @@ def test_a_resume_runs_only_the_topics_that_did_not_finish(boot, claude):
         # the finished one would re-bill the user for work they already paid
         # for. Counted by kind, because the resumed topic is also taught again
         # -- its lesson never landed either.
-        assert len(claude.calls_for("cards")) == spent + 1
-        resumed = claude.calls_for("cards")[-1]["messages"][0]["content"][-1]["text"]
+        assert len(llm.calls_for("cards")) == spent + 1
+        resumed = llm.calls_for("cards")[-1]["input"][0]["content"][-1]["text"]
         # The instruction opens by naming the one topic being generated. Other
         # topics appear further down as exclusions — that is the cross-topic
         # dedup partition, not a second topic being re-run.
@@ -136,10 +136,9 @@ def test_a_resume_runs_only_the_topics_that_did_not_finish(boot, claude):
         # uploaded file, under the name it was uploaded with: a prefix that
         # differs by one byte from the one pass 1 wrote reads no cache at all,
         # and the resume re-pays for the whole document.
-        prefix = claude.requests[-1]["messages"][0]["content"][0]
-        assert prefix["source"]["data"] == "Glycolysis occurs in the cytosol."
-        assert prefix["title"] == "lecture.txt"
-        assert claude.requests[-1]["system"] == claude.requests[0]["system"]
+        prefix = llm.requests[-1]["input"][0]["content"][0]
+        assert prefix["text"] == "Glycolysis occurs in the cytosol."
+        assert llm.requests[-1]["instructions"] == llm.requests[0]["instructions"]
 
         cards = restarted.get(f"/api/jobs/{job_id}/cards").json()["cards"]
         assert [c["front"] for c in cards] == [
@@ -149,13 +148,13 @@ def test_a_resume_runs_only_the_topics_that_did_not_finish(boot, claude):
         ]
 
 
-def test_a_resume_is_refused_until_the_backoff_has_elapsed(boot, claude):
+def test_a_resume_is_refused_until_the_backoff_has_elapsed(boot, llm):
     with boot() as machine:
-        job_id = planned_job(machine, claude)
+        job_id = planned_job(machine, llm)
 
-    claude.dies()
+    llm.dies()
     generate_until_killed(boot, job_id)
-    spent = len(claude.requests)
+    spent = len(llm.requests)
 
     with boot() as restarted:
         response = restarted.post(f"/api/jobs/{job_id}/generate")
@@ -164,11 +163,11 @@ def test_a_resume_is_refused_until_the_backoff_has_elapsed(boot, claude):
         # cache write several times a minute.
         assert response.status_code == 429
         assert 0 < int(response.headers["retry-after"]) <= 61
-        assert len(claude.requests) == spent
+        assert len(llm.requests) == spent
         assert restarted.get(f"/api/jobs/{job_id}").json()["state"] == "interrupted"
 
 
-def shut_down_mid_topic(boot, job_id, claude, *, drain_deadline_seconds):
+def shut_down_mid_topic(boot, job_id, llm, *, drain_deadline_seconds):
     """Generate, and shut the machine down with the second topic's call open.
 
     Leaving the client's context is the shutdown the platform's SIGTERM becomes.
@@ -177,22 +176,22 @@ def shut_down_mid_topic(boot, job_id, claude, *, drain_deadline_seconds):
     with ThreadPoolExecutor(max_workers=1) as pool:
         with machine:
             generating = pool.submit(machine.post, f"/api/jobs/{job_id}/generate")
-            assert claude.wait_for_paused_call(timeout=5)
+            assert llm.wait_for_paused_call(timeout=5)
         generating.exception(timeout=5)
 
 
 def test_a_shutdown_that_outlasts_its_deadline_checkpoints_and_starts_no_new_topic(
-    boot, claude
+    boot, llm
 ):
     with boot() as machine:
-        job_id = planned_job(machine, claude, plan=OVERSUBSCRIBED_PLAN)
+        job_id = planned_job(machine, llm, plan=OVERSUBSCRIBED_PLAN)
 
     # The pacesetter lands; every topic in the fan-out window is still open when
     # the shutdown arrives.
-    claude.replies_json(GLYCOLYSIS_CARDS)
+    llm.replies_json(GLYCOLYSIS_CARDS)
     for _ in range(worker.MAX_CONCURRENT_TOPICS):
-        claude.replies_json(CELL_CARDS, pause=1.0)
-    shut_down_mid_topic(boot, job_id, claude, drain_deadline_seconds=0.01)
+        llm.replies_json(CELL_CARDS, pause=1.0)
+    shut_down_mid_topic(boot, job_id, llm, drain_deadline_seconds=0.01)
 
     with boot() as restarted:
         job = restarted.get(f"/api/jobs/{job_id}").json()
@@ -213,8 +212,8 @@ def test_a_shutdown_that_outlasts_its_deadline_checkpoints_and_starts_no_new_top
         # on which topic each call was for, not on the string appearing
         # anywhere in the payload.
         worked_on = [
-            request["messages"][0]["content"][-1]["text"].splitlines()[0]
-            for request in claude.requests[1:]
+            request["input"][0]["content"][-1]["text"].splitlines()[0]
+            for request in llm.requests[1:]
         ]
         assert not any(LAST_TOPIC_PATH in line for line in worked_on)
         # A ceiling rather than an equality: how many of the window had reached
@@ -224,18 +223,18 @@ def test_a_shutdown_that_outlasts_its_deadline_checkpoints_and_starts_no_new_top
         # The pacesetter plus one full window. It runs alone first -- which is
         # what warms both cache lineages -- and only then do the rest fan out,
         # so the most that can ever be in flight is one more than the window.
-        assert len(claude.calls_for("cards")) <= worker.MAX_CONCURRENT_TOPICS + 1
+        assert len(llm.calls_for("cards")) <= worker.MAX_CONCURRENT_TOPICS + 1
 
 
-def test_a_shutdown_lets_a_topic_already_in_flight_land_before_it_stops(boot, claude):
+def test_a_shutdown_lets_a_topic_already_in_flight_land_before_it_stops(boot, llm):
     with boot() as machine:
-        job_id = planned_job(machine, claude, plan=OVERSUBSCRIBED_PLAN)
+        job_id = planned_job(machine, llm, plan=OVERSUBSCRIBED_PLAN)
 
-    claude.replies_json(GLYCOLYSIS_CARDS)
+    llm.replies_json(GLYCOLYSIS_CARDS)
     for _ in range(worker.MAX_CONCURRENT_TOPICS):
-        claude.replies_json(CELL_CARDS, pause=0.1)
+        llm.replies_json(CELL_CARDS, pause=0.1)
     began = time.monotonic()
-    shut_down_mid_topic(boot, job_id, claude, drain_deadline_seconds=30.0)
+    shut_down_mid_topic(boot, job_id, llm, drain_deadline_seconds=30.0)
     # Within the deadline, not at the end of it: the drain waits for the work,
     # not for the clock.
     assert time.monotonic() - began < 5.0
@@ -260,39 +259,39 @@ REVISED_GLYCOLYSIS_CARDS = {
 }
 
 
-def test_a_failed_topic_is_the_only_one_retried_and_the_job_then_completes(boot, claude):
+def test_a_failed_topic_is_the_only_one_retried_and_the_job_then_completes(boot, llm):
     with boot(resume_backoff_seconds=0) as machine:
-        job_id = planned_job(machine, claude)
-        claude.replies_json(GLYCOLYSIS_CARDS).refuses(category="bio")
+        job_id = planned_job(machine, llm)
+        llm.replies_json(GLYCOLYSIS_CARDS).refuses()
         machine.post(f"/api/jobs/{job_id}/generate")
 
         failed = machine.get(f"/api/jobs/{job_id}").json()
         assert failed["state"] == "failed"
         assert [t["status"] for t in topics_of(machine, job_id)] == ["done", "failed"]
-        spent = len(claude.calls_for("cards"))
+        spent = len(llm.calls_for("cards"))
 
-        claude.replies_json(CELL_CARDS)
+        llm.replies_json(CELL_CARDS)
         machine.post(f"/api/jobs/{job_id}/generate")
 
-        assert len(claude.calls_for("cards")) == spent + 1
+        assert len(llm.calls_for("cards")) == spent + 1
         assert machine.get(f"/api/jobs/{job_id}").json()["state"] == "complete"
         assert [t["attempt_count"] for t in topics_of(machine, job_id)] == [1, 2]
         assert len(machine.get(f"/api/jobs/{job_id}/cards").json()["cards"]) == 3
 
 
-def test_a_topic_run_again_replaces_its_earlier_cards_rather_than_adding_to_them(boot, claude):
+def test_a_topic_run_again_replaces_its_earlier_cards_rather_than_adding_to_them(boot, llm):
     with boot(resume_backoff_seconds=0) as machine:
-        job_id = planned_job(machine, claude)
-        claude.replies_json(GLYCOLYSIS_CARDS).refuses(category="bio")
+        job_id = planned_job(machine, llm)
+        llm.replies_json(GLYCOLYSIS_CARDS).refuses()
         machine.post(f"/api/jobs/{job_id}/generate")
 
         # The user revises the plan, which puts every topic back in the queue —
         # including the one that already produced cards.
-        claude.replies_json(PLAN)
+        llm.replies_json(PLAN)
         machine.post(f"/api/jobs/{job_id}/plan")
         assert [t["status"] for t in topics_of(machine, job_id)] == ["pending", "pending"]
 
-        claude.replies_json(REVISED_GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+        llm.replies_json(REVISED_GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
         machine.post(f"/api/jobs/{job_id}/generate")
 
         cards = machine.get(f"/api/jobs/{job_id}/cards").json()["cards"]
@@ -302,19 +301,19 @@ def test_a_topic_run_again_replaces_its_earlier_cards_rather_than_adding_to_them
         ]
 
 
-def crash_loop(boot, claude, job_id, times=3):
+def crash_loop(boot, llm, job_id, times=3):
     """A deterministic bug: every resume dies in the same place."""
     for _ in range(times):
-        claude.dies()
+        llm.dies()
         generate_until_killed(boot, job_id, resume_backoff_seconds=0)
 
 
-def test_a_job_that_keeps_dying_ends_up_dead_and_stops_resuming(boot, claude):
+def test_a_job_that_keeps_dying_ends_up_dead_and_stops_resuming(boot, llm):
     with boot() as machine:
-        job_id = planned_job(machine, claude)
+        job_id = planned_job(machine, llm)
 
-    crash_loop(boot, claude, job_id)
-    spent = len(claude.requests)
+    crash_loop(boot, llm, job_id)
+    spent = len(llm.requests)
 
     with boot(resume_backoff_seconds=0) as restarted:
         job = restarted.get(f"/api/jobs/{job_id}").json()
@@ -327,14 +326,14 @@ def test_a_job_that_keeps_dying_ends_up_dead_and_stops_resuming(boot, claude):
         # alternative is an invoice.
         assert refused.status_code == 409
         assert "cleared" in refused.json()["detail"]
-        assert len(claude.requests) == spent
+        assert len(llm.requests) == spent
         assert restarted.get(f"/api/jobs/{job_id}").json()["state"] == "dead"
 
 
-def test_clearing_a_dead_job_by_hand_lets_it_run_again(boot, claude):
+def test_clearing_a_dead_job_by_hand_lets_it_run_again(boot, llm):
     with boot() as machine:
-        job_id = planned_job(machine, claude)
-    crash_loop(boot, claude, job_id)
+        job_id = planned_job(machine, llm)
+    crash_loop(boot, llm, job_id)
 
     with boot(resume_backoff_seconds=0) as restarted:
         assert restarted.post(f"/api/jobs/{job_id}/clear").status_code == 200
@@ -342,13 +341,13 @@ def test_clearing_a_dead_job_by_hand_lets_it_run_again(boot, claude):
         assert cleared["state"] == "interrupted"
         assert cleared["attempt_count"] == 0
 
-        claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+        llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
         assert restarted.post(f"/api/jobs/{job_id}/generate").status_code == 200
         assert restarted.get(f"/api/jobs/{job_id}").json()["state"] == "complete"
 
 
-def test_clearing_a_job_that_is_not_dead_is_refused(client, claude):
-    job_id = planned_job(client, claude)
+def test_clearing_a_job_that_is_not_dead_is_refused(client, llm):
+    job_id = planned_job(client, llm)
 
     response = client.post(f"/api/jobs/{job_id}/clear")
 
@@ -360,41 +359,41 @@ def test_clearing_a_job_that_is_not_dead_is_refused(client, claude):
     assert job["state"] == "plan_ready"
 
 
-def test_a_completed_job_refuses_a_second_generation_run(client, claude):
-    job_id = planned_job(client, claude)
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+def test_a_completed_job_refuses_a_second_generation_run(client, llm):
+    job_id = planned_job(client, llm)
+    llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
-    spent = len(claude.requests)
+    spent = len(llm.requests)
 
     response = client.post(f"/api/jobs/{job_id}/generate")
 
     assert response.status_code == 409
     assert client.get(f"/api/jobs/{job_id}").json()["state"] == "complete"
     # The point of rejecting the transition is that it costs nothing.
-    assert len(claude.requests) == spent
+    assert len(llm.requests) == spent
 
 
-def test_planning_is_refused_once_a_job_has_completed(client, claude):
-    job_id = planned_job(client, claude)
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+def test_planning_is_refused_once_a_job_has_completed(client, llm):
+    job_id = planned_job(client, llm)
+    llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
-    spent = len(claude.requests)
+    spent = len(llm.requests)
 
     response = client.post(f"/api/jobs/{job_id}/plan")
 
     assert response.status_code == 409
-    assert len(claude.requests) == spent
+    assert len(llm.requests) == spent
 
 
-def test_each_topic_carries_its_own_status_and_attempt_count(client, claude):
-    job_id = planned_job(client, claude)
+def test_each_topic_carries_its_own_status_and_attempt_count(client, llm):
+    job_id = planned_job(client, llm)
 
     planned = topics_of(client, job_id)
     assert [t["topic_id"] for t in planned] == ["glycolysis", "cell-basics"]
     assert [t["status"] for t in planned] == ["pending", "pending"]
     assert [t["attempt_count"] for t in planned] == [0, 0]
 
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+    llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
 
     generated = topics_of(client, job_id)
@@ -403,7 +402,7 @@ def test_each_topic_carries_its_own_status_and_attempt_count(client, claude):
     assert [t["card_count"] for t in generated] == [2, 1]
 
 
-def test_an_api_error_fails_the_job_instead_of_stranding_it(client, claude):
+def test_an_api_error_fails_the_job_instead_of_stranding_it(client, llm):
     """A 400 from the API marks the job failed — visible and retryable —
     rather than leaving it claiming `planning` until a reboot notices.
 
@@ -411,7 +410,7 @@ def test_an_api_error_fails_the_job_instead_of_stranding_it(client, claude):
     refuses left a job stuck in `planning` with nothing on screen to tap.
     """
     job_id = upload(client)
-    claude.answers_error(400, "this model does not support the `fallbacks` parameter")
+    llm.answers_error(400, "this model does not support the `fallbacks` parameter")
     reply = client.post(f"/api/jobs/{job_id}/plan")
 
     assert reply.status_code == 422
@@ -420,32 +419,32 @@ def test_an_api_error_fails_the_job_instead_of_stranding_it(client, claude):
     assert "fallbacks" in job["error"]
 
 
-def test_a_rate_limited_burst_is_waited_out_not_failed(boot, claude):
+def test_a_rate_limited_burst_is_waited_out_not_failed(boot, llm):
     """The vendor's tokens-per-minute window says "try again in 19s"; the
     worker's answer is to wait and send again, holding its fan-out slot so
     the whole run self-paces to the tier the organization actually has.
     Observed live 2026-08-26 on OpenAI: without the wait, four of eight
     topics died inside one window."""
     with boot(rate_limit_pause_seconds=0.05) as machine:
-        claude.replies_json(PLAN)
+        llm.replies_json(PLAN)
         job_id = upload(machine)
         machine.post(f"/api/jobs/{job_id}/plan")
 
         for _ in range(3):
-            claude.answers_error(429, "Rate limit reached on tokens per min (TPM)")
-        claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+            llm.answers_error(429, "Rate limit reached on tokens per min (TPM)")
+        llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
 
         reply = machine.post(f"/api/jobs/{job_id}/generate")
         assert reply.status_code == 200
         assert [t["status"] for t in topics_of(machine, job_id)] == ["done", "done"]
 
 
-def test_a_rate_limited_planning_call_waits_too(boot, claude):
+def test_a_rate_limited_planning_call_waits_too(boot, llm):
     with boot(rate_limit_pause_seconds=0.05) as machine:
         job_id = upload(machine)
         for _ in range(3):
-            claude.answers_error(429, "Rate limit reached on tokens per min (TPM)")
-        claude.replies_json(PLAN)
+            llm.answers_error(429, "Rate limit reached on tokens per min (TPM)")
+        llm.replies_json(PLAN)
 
         reply = machine.post(f"/api/jobs/{job_id}/plan")
         assert reply.status_code == 200

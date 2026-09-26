@@ -13,8 +13,8 @@ def uuids(client, job_id):
     return [c["card_uuid"] for c in client.get(f"/api/jobs/{job_id}/cards").json()["cards"]]
 
 
-def test_several_cards_are_rejected_in_one_call(client, claude):
-    job_id = generated(client, claude)
+def test_several_cards_are_rejected_in_one_call(client, llm):
+    job_id = generated(client, llm)
     doomed = uuids(client, job_id)
 
     rejected = client.post(f"/api/jobs/{job_id}/cards/reject", json={"card_uuids": doomed})
@@ -24,9 +24,9 @@ def test_several_cards_are_rejected_in_one_call(client, claude):
     assert uuids(client, job_id) == []
 
 
-def test_rejecting_a_card_that_is_already_gone_is_not_an_error(client, claude):
+def test_rejecting_a_card_that_is_already_gone_is_not_an_error(client, llm):
     """The screen the user is looking at is always slightly out of date."""
-    job_id = generated(client, claude)
+    job_id = generated(client, llm)
     doomed = uuids(client, job_id)
     client.delete(f"/api/cards/{doomed[0]}")
 
@@ -36,13 +36,13 @@ def test_rejecting_a_card_that_is_already_gone_is_not_an_error(client, claude):
     assert again.json()["rejected"] == 1, "only the one that was still there"
 
 
-def test_accepting_cards_records_that_they_were_actually_read(client, claude):
+def test_accepting_cards_records_that_they_were_actually_read(client, llm):
     """Accept has to mean something, or the button is a lie.
 
     It marks the card reviewed, which is what lets somebody stop half way
     through 164 cards and come back to the right place.
     """
-    job_id = generated(client, claude)
+    job_id = generated(client, llm)
     first = uuids(client, job_id)[:1]
 
     accepted = client.post(f"/api/jobs/{job_id}/cards/accept", json={"card_uuids": first})
@@ -52,8 +52,8 @@ def test_accepting_cards_records_that_they_were_actually_read(client, claude):
     assert [c["reviewed"] for c in cards] == [True, False]
 
 
-def test_the_card_screen_says_how_far_through_the_review_is(client, claude):
-    job_id = generated(client, claude)
+def test_the_card_screen_says_how_far_through_the_review_is(client, llm):
+    job_id = generated(client, llm)
     body = client.get(f"/api/jobs/{job_id}/cards").json()
     assert body["reviewed_count"] == 0
     assert body["total"] == 2
@@ -63,8 +63,8 @@ def test_the_card_screen_says_how_far_through_the_review_is(client, claude):
     assert client.get(f"/api/jobs/{job_id}/cards").json()["reviewed_count"] == 2
 
 
-def test_an_edited_card_counts_as_reviewed_because_somebody_clearly_looked(client, claude):
-    job_id = generated(client, claude)
+def test_an_edited_card_counts_as_reviewed_because_somebody_clearly_looked(client, llm):
+    job_id = generated(client, llm)
     target = uuids(client, job_id)[1]
 
     client.patch(f"/api/cards/{target}", json={"front": "Corrected?", "back": "Corrected."})
@@ -73,13 +73,13 @@ def test_an_edited_card_counts_as_reviewed_because_somebody_clearly_looked(clien
     assert cards[target]["reviewed"] is True
 
 
-def test_bulk_review_of_somebody_elses_job_is_refused(boot, claude):
+def test_bulk_review_of_somebody_elses_job_is_refused(boot, llm):
     from tests.conftest import SOMEBODY_ELSE, TESTER
 
     with boot() as machine:
 
         machine.sign_in_as(TESTER)
-        job_id = generated(machine, claude)
+        job_id = generated(machine, llm)
         hers = uuids(machine, job_id)
 
         machine.sign_in_as(SOMEBODY_ELSE)

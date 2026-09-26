@@ -7,8 +7,8 @@ survives a bug in this application.
 
 ### 1. The provider-side monthly cap — the outer backstop
 
-Set a hard monthly spend limit and a low-balance alert on the Anthropic
-organisation, in the Console. **This is the only control that survives a bug in
+Set a hard monthly budget and a usage alert on the OpenAI organisation, in the
+platform console (Settings → Limits). **This is the only control that survives a bug in
 this application**, and it is the reason it exists: every other layer below is
 code, and code is what you are protecting yourself against.
 
@@ -235,26 +235,26 @@ it is an account nobody can reach.
 
 ## Deploying
 
-One machine, one volume, one region. Two machines would be two different
-SQLite databases, silently — which is why `min_machines_running` is 1 and
-`auto_stop_machines` is off. A job runs for minutes after its request has
-returned, so auto-stopping on idle HTTP would kill runs part-way through.
+One machine, one volume, one region. Uploads live on the volume and jobs run
+in-process on the machine that took them, which is why `min_machines_running`
+is 1 and `auto_stop_machines` is off. A job runs for minutes after its request
+has returned, so auto-stopping on idle HTTP would kill runs part-way through.
 
 ### First deploy
 
 ```bash
-fly launch --no-deploy --copy-config --name ai-anki --region lhr
+fly launch --no-deploy --copy-config --name ai-anki --region sjc
 ```
 
 ```bash
-fly volumes create ai_anki_data --region lhr --size 3
+fly volumes create ai_anki_data --region sjc --size 3
 ```
 
 The volume holds uploads and `TMPDIR` only. The database is Supabase's now,
 which is why losing this volume costs a re-upload rather than everything.
 
 ```bash
-fly secrets set ANTHROPIC_API_KEY=sk-ant-... \
+fly secrets set OPENAI_API_KEY=sk-... \
   AI_ANKI_DATABASE_URL="postgresql://..." \
   AI_ANKI_JWT_ISSUER="https://<project>.supabase.co/auth/v1"
 ```

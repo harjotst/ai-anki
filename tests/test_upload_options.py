@@ -29,7 +29,7 @@ def upload(client, *, name="lecture.txt", deck_name="Metabolism", **fields):
 
 
 def instruction_of(request: dict) -> str:
-    return request["messages"][0]["content"][-1]["text"]
+    return request["input"][0]["content"][-1]["text"]
 
 
 # --- names ----------------------------------------------------------------
@@ -79,34 +79,34 @@ def test_adding_to_an_existing_deck_needs_no_name(client):
 # --- the brief ------------------------------------------------------------
 
 
-def test_guidance_reaches_the_planner_verbatim(client, claude):
-    claude.replies_json(PLAN)
+def test_guidance_reaches_the_planner_verbatim(client, llm):
+    llm.replies_json(PLAN)
     job_id = upload(client, guidance="Focus on hormones; skip the history section.")
     client.post(f"/api/jobs/{job_id}/plan")
-    instruction = instruction_of(claude.requests[-1])
+    instruction = instruction_of(llm.requests[-1])
     assert "Focus on hormones; skip the history section." in instruction
     assert "THE USER'S OWN INSTRUCTIONS" in instruction
 
 
-def test_detail_level_bends_all_three_passes(client, claude):
-    claude.replies_json(PLAN)
+def test_detail_level_bends_all_three_passes(client, llm):
+    llm.replies_json(PLAN)
     job_id = upload(client, detail_level="5")
     client.post(f"/api/jobs/{job_id}/plan")
-    assert "Depth 5 of 5" in instruction_of(claude.requests[-1])
+    assert "Depth 5 of 5" in instruction_of(llm.requests[-1])
 
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+    llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
     for kind in ("lesson", "cards"):
-        for request in claude.calls_for(kind):
+        for request in llm.calls_for(kind):
             assert "Depth 5 of 5" in instruction_of(request), kind
 
 
-def test_saying_nothing_adds_nothing_to_any_prompt(client, claude):
+def test_saying_nothing_adds_nothing_to_any_prompt(client, llm):
     """Level 3 and silence are the same deck: the model's own judgment."""
-    claude.replies_json(PLAN)
+    llm.replies_json(PLAN)
     job_id = upload(client, detail_level="3")
     client.post(f"/api/jobs/{job_id}/plan")
-    instruction = instruction_of(claude.requests[-1])
+    instruction = instruction_of(llm.requests[-1])
     assert "Depth" not in instruction
     assert "THE USER'S OWN INSTRUCTIONS" not in instruction
 

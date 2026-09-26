@@ -13,7 +13,6 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 
-import anthropic
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
@@ -25,7 +24,7 @@ from app import worker as worker_module
 def create_app(
     database_url: str,
     data_dir: Path,
-    anthropic_client: anthropic.Anthropic | None = None,
+    openai_client=None,
     provider=None,
     *,
     resume_backoff_seconds: float = jobs.MIN_RESUME_BACKOFF_SECONDS,
@@ -47,9 +46,9 @@ def create_app(
     data_dir = Path(data_dir)
     backup_destination = backup_destination or backup.destination_from_env()
     verifier = verifier or identity.from_env()
-    # One vendor, chosen by configuration. Everything vendor-specific lives behind
-    # this object; nothing below it knows which one is serving the job.
-    provider = provider or providers.build(client=anthropic_client)
+    # Everything vendor-specific lives behind this object; nothing below it
+    # knows how a request is shaped or billed.
+    provider = provider or providers.build(client=openai_client)
     refusals = providers.check_usable(provider)
     if refusals:
         raise ValueError(
@@ -570,10 +569,14 @@ def create_app(
 
         topic = jobs.topic_of(conn, existing["job_id"], existing["topic_id"])
         documents = jobs.documents_for(conn, existing["job_id"], provider)
-        request = generation.build_cards_request(documents, {**topic, "proposed_card_count": 1}, provider)
-        request["messages"][0]["content"][-1]["text"] += (
-            "\n\nWrite ONE replacement for this card, asking the same thing a different "
-            f"way:\n{existing['front']}\n"
+        request = generation.build_cards_request(
+            documents,
+            {**topic, "proposed_card_count": 1},
+            provider,
+            also=(
+                "\n\nWrite ONE replacement for this card, asking the same thing a "
+                f"different way:\n{existing['front']}\n"
+            ),
         )
         try:
             reply = send_patiently(request)

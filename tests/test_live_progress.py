@@ -45,23 +45,23 @@ def sse_events(response) -> list[Event]:
     return events
 
 
-def planned_job(client, claude, plan=PLAN):
-    claude.replies_json(plan)
+def planned_job(client, llm, plan=PLAN):
+    llm.replies_json(plan)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
     return job_id
 
 
-def generated_job(client, claude):
-    job_id = planned_job(client, claude)
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+def generated_job(client, llm):
+    job_id = planned_job(client, llm)
+    llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
     return job_id
 
 
-def test_a_finished_run_replays_in_full_on_a_machine_that_never_saw_it(boot, claude):
+def test_a_finished_run_replays_in_full_on_a_machine_that_never_saw_it(boot, llm):
     with boot() as machine:
-        job_id = generated_job(machine, claude)
+        job_id = generated_job(machine, llm)
 
     # A second process: it holds nothing about this job, so anything it can say
     # about the run it read out of the database.
@@ -96,11 +96,11 @@ def ids_of(events) -> list[str]:
     return [e.id for e in events if e.id is not None]
 
 
-def test_a_reconnecting_client_is_sent_what_it_missed_and_nothing_it_already_had(boot, claude):
+def test_a_reconnecting_client_is_sent_what_it_missed_and_nothing_it_already_had(boot, llm):
     # A stream over a job that is between runs has nothing to wait for, so it is
     # given a short life; a browser would reconnect when it ended.
     with boot(event_stream_seconds=0.1) as machine:
-        job_id = planned_job(machine, claude)
+        job_id = planned_job(machine, llm)
         watched = sse_events(machine.get(f"/api/jobs/{job_id}/events"))
         assert [e.data["state"] for e in watched if e.event == "state"] == [
             "uploaded",
@@ -110,7 +110,7 @@ def test_a_reconnecting_client_is_sent_what_it_missed_and_nothing_it_already_had
 
         # The connection is dropped here, and the whole of generation happens
         # while nobody is listening.
-        claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+        llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
         machine.post(f"/api/jobs/{job_id}/generate")
 
         missed = sse_events(
@@ -144,13 +144,13 @@ def current_view(events) -> dict:
     return view
 
 
-def test_reopening_the_tab_shows_where_a_job_that_lost_its_machine_got_to(boot, claude):
+def test_reopening_the_tab_shows_where_a_job_that_lost_its_machine_got_to(boot, llm):
     with boot() as machine:
-        job_id = planned_job(machine, claude)
+        job_id = planned_job(machine, llm)
 
     # The machine dies with the second topic's call in flight. Whatever the
     # worker knew about that run died with the process.
-    claude.replies_json(GLYCOLYSIS_CARDS).dies()
+    llm.replies_json(GLYCOLYSIS_CARDS).dies()
     generate_until_killed(boot, job_id)
 
     with boot(event_stream_seconds=0.1) as restarted:
@@ -165,9 +165,9 @@ def test_reopening_the_tab_shows_where_a_job_that_lost_its_machine_got_to(boot, 
     assert view["topics"]["cell-basics"]["card_count"] == 0
 
 
-def test_the_stream_refuses_the_encoding_and_buffering_the_platform_would_apply(boot, claude):
+def test_the_stream_refuses_the_encoding_and_buffering_the_platform_would_apply(boot, llm):
     with boot(event_stream_seconds=0.1) as machine:
-        job_id = planned_job(machine, claude)
+        job_id = planned_job(machine, llm)
         response = machine.get(f"/api/jobs/{job_id}/events")
 
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -185,9 +185,9 @@ def test_watching_a_job_that_does_not_exist_is_refused(client):
     assert client.get("/api/jobs/no-such-job/events").status_code == 404
 
 
-def test_a_heartbeat_keeps_the_connection_open_while_there_is_nothing_to_report(boot, claude):
+def test_a_heartbeat_keeps_the_connection_open_while_there_is_nothing_to_report(boot, llm):
     with boot(heartbeat_seconds=0.05, event_stream_seconds=0.4) as machine:
-        job_id = planned_job(machine, claude)
+        job_id = planned_job(machine, llm)
         response = machine.get(f"/api/jobs/{job_id}/events")
 
     # Nothing happens to this job for the life of the connection, and it stays
@@ -199,25 +199,25 @@ def test_a_heartbeat_keeps_the_connection_open_while_there_is_nothing_to_report(
     assert progress.HEARTBEAT_SECONDS <= 20
 
 
-def watch_mid_run(machine, claude, job_id) -> list[Event]:
+def watch_mid_run(machine, llm, job_id) -> list[Event]:
     """Open the stream with a topic call genuinely in flight, and watch to the end.
 
     The second topic's call is held open, the way a real one is for minutes at a
     time, so the client connects mid-run rather than over a finished job.
     """
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS, pause=0.5)
+    llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS, pause=0.5)
     with ThreadPoolExecutor(max_workers=1) as pool:
         generating = pool.submit(machine.post, f"/api/jobs/{job_id}/generate")
-        assert claude.wait_for_paused_call(timeout=5)
+        assert llm.wait_for_paused_call(timeout=5)
         events = sse_events(machine.get(f"/api/jobs/{job_id}/events"))
         assert generating.result(timeout=10).status_code == 200
     return events
 
 
-def test_a_topic_finishing_reaches_a_client_that_is_already_watching(boot, claude):
+def test_a_topic_finishing_reaches_a_client_that_is_already_watching(boot, llm):
     with boot(event_stream_seconds=5.0) as machine:
-        job_id = planned_job(machine, claude)
-        events = watch_mid_run(machine, claude, job_id)
+        job_id = planned_job(machine, llm)
+        events = watch_mid_run(machine, llm, job_id)
 
     # The second topic was still being paid for when this client connected: it
     # was already claimed, and everything after that did not exist yet at
@@ -237,11 +237,11 @@ def test_a_topic_finishing_reaches_a_client_that_is_already_watching(boot, claud
 
 
 def test_what_a_client_watched_live_is_reproduced_by_a_machine_that_only_has_the_database(
-    boot, claude
+    boot, llm
 ):
     with boot(event_stream_seconds=5.0) as machine:
-        job_id = planned_job(machine, claude)
-        watched = watch_mid_run(machine, claude, job_id)
+        job_id = planned_job(machine, llm)
+        watched = watch_mid_run(machine, llm, job_id)
 
     # A different process, holding nothing but the file the last one wrote.
     with boot(event_stream_seconds=0.1) as restarted:

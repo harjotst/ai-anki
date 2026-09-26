@@ -8,9 +8,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "python-multipart>=0.0.20",
-    # Below 1.0: the 1.x SDK moved to httpx2 and refuses the httpx transport
-    # the test suite fakes the API at.
-    "anthropic>=0.40,<1",
+    # The model vendor. The suite fakes it at the httpx transport, so the SDK
+    # itself stays in the loop in every test.
     "openai>=3.3",
     # The request path borrows warm connections instead of opening one TLS
     # handshake per call — the churn is what the hosted database throttled.
@@ -42,7 +41,7 @@ dependencies = [
     # it PyJWT can decode an RS256 token and cannot check its signature, which
     # fails open rather than closed.
     "pyjwt[crypto]>=2.9",
-    # Fetching the auth provider's key set. Present transitively via anthropic,
+    # Fetching the auth provider's key set. Present transitively via openai,
     # declared here because this code imports it directly and a transitive
     # dependency is one somebody else can drop.
     "httpx>=0.28",

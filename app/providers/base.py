@@ -1,11 +1,10 @@
-"""What the rest of the application is allowed to know about a model vendor.
+"""What the rest of the application is allowed to know about the model vendor.
 
-The interface is deliberately narrow. Everything that differs between vendors —
-how a document is attached, how caching is expressed, how JSON is constrained,
-how a refusal is signalled, what tokens cost — sits behind it, because those are
-exactly the things that do not generalise.
+The interface is deliberately narrow. How a document is attached, how caching
+is expressed, how JSON is constrained, how a refusal is signalled and what
+tokens cost all sit behind it, so none of that leaks into the passes.
 
-Three capabilities are hard requirements for this workload, and a provider that
+Three capabilities are hard requirements for this workload, and a model that
 cannot do all three is not cheaper, it is unusable:
 
   * caching that survives a human pause at the plan checkpoint. Without it the
@@ -64,7 +63,7 @@ class Reply:
 
 @dataclass(frozen=True)
 class Prices:
-    """USD per million tokens. Hardcoded per provider, never fetched.
+    """USD per million tokens. Hardcoded per model, never fetched.
 
     A price that changes silently underneath a budget check is worse than one
     that is visibly stale, so every rate here carries the date it was verified.
@@ -75,17 +74,14 @@ class Prices:
     cache_write: float
     cache_read: float
     verified_on: str
-    storage_per_mtok_hour: float = 0.0
 
-    def cost(self, usage: Usage, *, cache_hours: float = 0.0) -> float:
+    def cost(self, usage: Usage) -> float:
         per = 1_000_000
         return round(
             usage.input_tokens * self.input / per
             + usage.cache_write_tokens * self.cache_write / per
             + usage.cache_read_tokens * self.cache_read / per
-            + usage.output_tokens * self.output / per
-            # Only Google rents cached content by the hour; it is zero elsewhere.
-            + (usage.cache_write_tokens / per) * cache_hours * self.storage_per_mtok_hour,
+            + usage.output_tokens * self.output / per,
             6,
         )
 
@@ -132,7 +128,9 @@ class Provider(Protocol):
         Documents go first and the instruction last, so calls sharing a schema
         share one cacheable prefix.
 
-        `cache` is the lifetime to ask for ("5m", "1h") or None for no caching.
+        `cache` asks for the prefix to be cached ("5m", say) or is None for no
+        caching; the lifetime actually granted is the model's own (see
+        `Capabilities.cache_survives_minutes`).
         None is the right answer more often than it looks: a cache entry nothing
         reads still costs a write premium, so caching is only worth it when a
         *later* call will share this exact prefix.

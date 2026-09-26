@@ -1,5 +1,5 @@
 app = "ai-anki"
-primary_region = "lhr"
+primary_region = "sjc"
 
 # These must sit above every table header. TOML assigns bare keys to the most
 # recent table, so placing them at the foot of the file would silently make them

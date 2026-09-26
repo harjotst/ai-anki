@@ -1,10 +1,10 @@
 """Masked-label cards for diagrams.
 
 The note type is stock and cheap. The coordinates are the expensive part, and
-they are why this has its own ingestion path: Anthropic's documentation states
-that PDF pages are rasterized server-side at dimensions the caller does not
-control, so coordinates returned against a PDF block cannot be mapped back onto
-the page. Everything here rasterizes locally first.
+they are why this has its own ingestion path: a PDF sent as a document is
+rasterized server-side at dimensions the caller does not control, so
+coordinates returned against it cannot be mapped back onto the page.
+Everything here rasterizes locally first.
 """
 
 import genanki
@@ -12,10 +12,11 @@ import pytest
 
 from app import occlusion
 from app.jobs import Card
+from app.providers.openai_provider import OpenAIProvider
 from tests.anki_harness import anki_collection
 
 
-def test_the_image_is_resized_the_way_the_api_will_resize_it():
+def test_the_image_is_resized_to_a_size_we_choose_and_know():
     # Normalising against the original size instead of this is how masks end up
     # subtly and consistently offset.
     assert occlusion.resized_dimensions(1000, 800) == (1000, 800)
@@ -24,22 +25,19 @@ def test_the_image_is_resized_the_way_the_api_will_resize_it():
     assert wide == (2576, 1288), "aspect ratio is preserved"
 
 
-def test_a_full_size_image_stays_inside_the_visual_token_cap():
-    assert occlusion.visual_tokens(5152, 2576) <= 4784
-
-
 def test_coordinates_are_requested_in_pixels_not_pre_normalised(tmp_path):
     image = tmp_path / "diagram.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
 
-    request = occlusion.build_shapes_request(image)
+    request = occlusion.build_shapes_request(image, OpenAIProvider(object()))
 
-    instruction = request["messages"][0]["content"][-1]["text"]
+    instruction = request["input"][0]["content"][-1]["text"]
     assert "ABSOLUTE PIXEL" in instruction
     # Asking for pre-normalised coordinates is documented as working badly; we
     # normalise ourselves, where the dimensions are known.
     assert "0 and 1000" not in instruction
-    assert request["messages"][0]["content"][0]["type"] == "image"
+    assert request["input"][0]["content"][0]["type"] == "input_image"
+    assert request["text"]["format"]["schema"] == occlusion.SHAPES_SCHEMA
 
 
 def test_pixels_become_fractions_against_the_size_we_actually_sent():

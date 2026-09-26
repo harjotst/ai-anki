@@ -1,17 +1,14 @@
-"""OpenAI, via the Responses API. The budget option.
+"""OpenAI, via the Responses API.
 
-GPT-5.6 Luna is priced an order of magnitude under Sonnet 5 on this workload
-— $0.20/$1.20 per MTok against $2/$10 — which is the whole reason this module
-exists. Every request shape here was verified against the versioned developer
-docs on 2026-08-26: `input_file` document parts, `text.format` structured
-outputs with `strict: true`, and explicit prompt caching via
-`prompt_cache_options` with per-part `prompt_cache_breakpoint` markers.
+Every request shape here was verified against the versioned developer docs on
+2026-08-26: `input_file` document parts, `text.format` structured outputs with
+`strict: true`, and explicit prompt caching via `prompt_cache_options` with
+per-part `prompt_cache_breakpoint` markers.
 
-Caching differs from Anthropic in two load-bearing ways. The only supported
-TTL on GPT-5.6+ is "30m" — there is no one-hour tier, so a request asking for
-"1h" gets thirty minutes and the capability declaration says so. And writes
-bill at 1.25x the input rate against Anthropic's 2x, while reads are 0.1x on
-both — the fan-out economics that make a topic run affordable carry over.
+The only cache TTL GPT-5.6+ supports is "30m", so a caller asking for a longer
+life gets thirty minutes and the capability declaration says so. Writes bill
+at 1.25x the input rate and reads at 0.1x, which is what makes a topic fan-out
+over one shared document affordable.
 """
 
 from __future__ import annotations
@@ -19,16 +16,10 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import re
 from pathlib import Path
 
 import openai
-
-from app.providers.anthropic_provider import (
-    INLINE_LIMIT_BYTES,
-    INLINE_TEXT_SUFFIXES,
-    estimate_document_tokens,
-)
-import re
 
 from app.providers.base import Capabilities, Prices, RateLimited, Reply, Unusable, Usage
 
@@ -39,9 +30,44 @@ MODELS = {
     "gpt-5.6-luna": Prices(0.20, 1.20, 0.25, 0.02, verified_on="2026-08-26"),
 }
 
+DEFAULT_MODEL = "gpt-5.6-luna"
+
 # The only TTL GPT-5.6+ accepts, and how long a prefix survives after its
-# last use. Above the app's 20-minute floor; nowhere near Anthropic's hour.
+# last use. Above the app's 20-minute floor.
 CACHE_TTL = "30m"
+
+# Small text goes inline; anything at or above this is uploaded through the
+# Files API and referenced by id.
+INLINE_LIMIT_BYTES = 256 * 1024
+INLINE_TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".text"}
+
+# A document page is read as extracted text and as a rendered image, and both
+# are billed. Used only for documents that cannot be counted exactly.
+TOKENS_PER_PAGE_ESTIMATE = 5_000
+
+
+def estimate_document_tokens(path: Path | None) -> int:
+    """A deliberately pessimistic stand-in for a document we cannot count exactly.
+
+    Over-estimating turns away a job that might have fitted; under-estimating
+    lets through one that cannot run and bills for the attempt. The first is
+    the cheaper mistake.
+    """
+    if path is None or not path.exists():
+        return TOKENS_PER_PAGE_ESTIMATE * 40
+    if path.suffix.lower() == ".pdf":
+        try:
+            import pypdfium2
+
+            document = pypdfium2.PdfDocument(str(path))
+            try:
+                return len(document) * TOKENS_PER_PAGE_ESTIMATE
+            finally:
+                document.close()
+        except Exception:
+            pass
+    # Fall back on size. Rough, and meant to be.
+    return max(1, path.stat().st_size // 400)
 
 
 def _retry_after(exc) -> float | None:
@@ -67,7 +93,7 @@ def _retry_after(exc) -> float | None:
 class OpenAIProvider:
     name = "openai"
 
-    def __init__(self, client, model: str = "gpt-5.6-luna"):
+    def __init__(self, client, model: str = DEFAULT_MODEL):
         if model not in MODELS:
             raise ValueError(f"unpriced model {model!r}; add it to MODELS with a verified rate")
         self._client = client
@@ -107,11 +133,10 @@ class OpenAIProvider:
     def build_request(
         self, *, system, documents, instruction, schema, max_tokens, cache=None
     ) -> dict:
-        # Same discipline as the other vendors, spelled OpenAI's way: documents
-        # first and the instruction last, with exactly one cache breakpoint on
-        # the last document — and only when a later call will actually read it.
-        # `mode: "explicit"` turns the automatic best-effort caching into the
-        # guaranteed kind the cost model rests on.
+        # Documents first and the instruction last, with exactly one cache
+        # breakpoint on the last document — and only when a later call will
+        # actually read it. `mode: "explicit"` turns the automatic best-effort
+        # caching into the guaranteed kind the cost model rests on.
         marked = [dict(block) for block in documents]
         request: dict = {
             "model": self.model,
@@ -183,8 +208,7 @@ class OpenAIProvider:
         total_input = getattr(u, "input_tokens", 0) or 0
         return Usage(
             # OpenAI reports cached and written tokens inside the input count,
-            # so the plain-rate remainder is derived rather than read off —
-            # the same arithmetic the Gemini path does.
+            # so the plain-rate remainder is derived rather than read off.
             input_tokens=max(0, total_input - cached - written),
             cache_write_tokens=written,
             cache_read_tokens=cached,

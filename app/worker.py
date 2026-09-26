@@ -210,7 +210,10 @@ class Worker:
                 )
                 return None
 
-            await asyncio.to_thread(jobs.start_topic, conn, job_id, topic.topic_id)
+            # Refused when the job stopped between the check above and here:
+            # a shutdown's checkpoint got in first.
+            if not await asyncio.to_thread(jobs.start_topic, conn, job_id, topic.topic_id):
+                return None
 
             taught = await self._teach(conn, job_id, topic, documents, detail_level)
             if taught is False:

@@ -1,6 +1,6 @@
 """Our JSON schemas, checked against what the API actually accepts.
 
-Every other test drives a scripted Claude, so a schema the real API would
+Every other test drives a scripted model, so a schema the real API would
 reject passes all of them and fails only in front of a user — which is
 exactly how a `minItems: 2` reached a live run and stopped generation dead
 on the first topic. These rules come from the structured-output API's own

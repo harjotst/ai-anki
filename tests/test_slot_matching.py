@@ -35,48 +35,48 @@ def card(front, back="A.", *, existing=None, note_type="basic"):
     }
 
 
-def run(client, claude, cards, deck_id=None):
-    claude.counts_tokens(1000).replies_json(PLAN)
+def run(client, llm, cards, deck_id=None):
+    llm.counts_tokens(1000).replies_json(PLAN)
     job_id = client.post(
         "/api/jobs",
         files={"file": ("lecture.txt", b"Material.", "text/plain")},
         data={"deck_id": deck_id} if deck_id else {"deck_name": "Lecture"},
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json({"cards": cards})
+    llm.replies_json({"cards": cards})
     client.post(f"/api/jobs/{job_id}/generate")
     return job_id
 
 
-def first_run(client, claude):
-    job_id = run(client, claude, [card("What makes ATP?", "Mitochondria.")])
+def first_run(client, llm):
+    job_id = run(client, llm, [card("What makes ATP?", "Mitochondria.")])
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
     client.get(f"/api/jobs/{job_id}/deck.apkg")
     entry = client.get(f"/api/decks/{deck_id}/ledger").json()["cards"][0]
     return deck_id, entry["card_uuid"]
 
 
-def test_a_topic_call_is_told_which_cards_already_exist(client, claude):
-    deck_id, uuid = first_run(client, claude)
+def test_a_topic_call_is_told_which_cards_already_exist(client, llm):
+    deck_id, uuid = first_run(client, llm)
 
-    run(client, claude, [card("What makes ATP?", "Mitochondria.", existing=uuid)], deck_id)
+    run(client, llm, [card("What makes ATP?", "Mitochondria.", existing=uuid)], deck_id)
 
-    instruction = claude.requests[-1]["messages"][0]["content"][-1]["text"]
+    instruction = llm.requests[-1]["input"][0]["content"][-1]["text"]
     assert uuid in instruction
     assert "What makes ATP?" in instruction
     # After the breakpoint, so the per-topic varying text never disturbs the
     # cached document prefix.
-    content = claude.requests[-1]["messages"][0]["content"]
-    assert content[-1]["type"] == "text"
-    assert "cache_control" not in content[-1]
+    content = llm.requests[-1]["input"][0]["content"]
+    assert content[-1]["type"] == "input_text"
+    assert "prompt_cache_breakpoint" not in content[-1]
 
 
-def test_a_claimed_revision_keeps_the_existing_identity(client, claude):
-    deck_id, uuid = first_run(client, claude)
+def test_a_claimed_revision_keeps_the_existing_identity(client, llm):
+    deck_id, uuid = first_run(client, llm)
 
     run(
         client,
-        claude,
+        llm,
         [card("What makes most of the cell's ATP?", "The mitochondrion.", existing=uuid)],
         deck_id,
     )
@@ -86,13 +86,13 @@ def test_a_claimed_revision_keeps_the_existing_identity(client, claude):
     assert entries[0]["card_uuid"] == uuid
 
 
-def test_a_claim_on_an_unrelated_question_is_rejected_and_the_card_becomes_new(client, claude):
+def test_a_claim_on_an_unrelated_question_is_rejected_and_the_card_becomes_new(client, llm):
     """The corruption guard, and the reason claims are verified rather than trusted."""
-    deck_id, uuid = first_run(client, claude)
+    deck_id, uuid = first_run(client, llm)
 
     run(
         client,
-        claude,
+        llm,
         [card("In which compartment does glycolysis occur?", "Cytosol.", existing=uuid)],
         deck_id,
     )
@@ -103,20 +103,20 @@ def test_a_claim_on_an_unrelated_question_is_rejected_and_the_card_becomes_new(c
     assert len(entries) == 2
 
 
-def test_a_claim_on_a_card_from_another_topic_is_rejected(client, claude):
-    deck_id, uuid = first_run(client, claude)
+def test_a_claim_on_a_card_from_another_topic_is_rejected(client, llm):
+    deck_id, uuid = first_run(client, llm)
 
     other_topic = {
         "topics": [{**PLAN["topics"][0], "topic_id": "metabolism", "path": "Bio::Metabolism"}]
     }
-    claude.counts_tokens(1000).replies_json(other_topic)
+    llm.counts_tokens(1000).replies_json(other_topic)
     job_id = client.post(
         "/api/jobs",
         files={"file": ("lecture.txt", b"Material.", "text/plain")},
         data={"deck_id": deck_id},
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json({"cards": [card("What makes ATP?", "Mitochondria.", existing=uuid)]})
+    llm.replies_json({"cards": [card("What makes ATP?", "Mitochondria.", existing=uuid)]})
     client.post(f"/api/jobs/{job_id}/generate")
 
     rejected = client.get(f"/api/jobs/{job_id}/cards").json()["cards"][0]
@@ -125,11 +125,11 @@ def test_a_claim_on_a_card_from_another_topic_is_rejected(client, claude):
 
 
 def test_a_card_the_model_stops_producing_is_retired_and_its_identifier_never_returns(
-    client, claude
+    client, llm
 ):
-    deck_id, uuid = first_run(client, claude)
+    deck_id, uuid = first_run(client, llm)
 
-    run(client, claude, [card("A completely different question?", "Yes.")], deck_id)
+    run(client, llm, [card("A completely different question?", "Yes.")], deck_id)
 
     entries = {e["card_uuid"]: e for e in client.get(f"/api/decks/{deck_id}/ledger").json()["cards"]}
     assert entries[uuid]["retired_at"] is not None
@@ -139,14 +139,14 @@ def test_a_card_the_model_stops_producing_is_retired_and_its_identifier_never_re
 
 
 def test_changing_a_cards_note_type_mints_a_new_identity_instead_of_reusing_the_old(
-    client, claude
+    client, llm
 ):
     """Anki reports a notetype change as conflicting and updates nothing at all."""
-    deck_id, uuid = first_run(client, claude)
+    deck_id, uuid = first_run(client, llm)
 
     run(
         client,
-        claude,
+        llm,
         [
             card(
                 "What makes {{c1::ATP}}?",
@@ -165,21 +165,21 @@ def test_changing_a_cards_note_type_mints_a_new_identity_instead_of_reusing_the_
     assert minted[0]["note_type"] == "cloze"
 
 
-def test_regenerating_twice_leaves_an_unchanged_slot_on_the_same_identifier(client, claude):
+def test_regenerating_twice_leaves_an_unchanged_slot_on_the_same_identifier(client, llm):
     """Stability across runs is the whole promise; drift here is silent."""
-    deck_id, uuid = first_run(client, claude)
+    deck_id, uuid = first_run(client, llm)
 
     for _ in range(2):
-        run(client, claude, [card("What makes ATP?", "Mitochondria.", existing=uuid)], deck_id)
+        run(client, llm, [card("What makes ATP?", "Mitochondria.", existing=uuid)], deck_id)
 
     entries = client.get(f"/api/decks/{deck_id}/ledger").json()["cards"]
     assert [e["card_uuid"] for e in entries] == [uuid]
 
 
-def test_an_updated_card_lands_on_the_existing_note_and_keeps_its_scheduling(client, claude):
+def test_an_updated_card_lands_on_the_existing_note_and_keeps_its_scheduling(client, llm):
     # Built inline rather than via first_run, because this test needs the bytes
     # of that first export to put into the collection.
-    first_job = run(client, claude, [card("What makes ATP?", "Mitochondria.")])
+    first_job = run(client, llm, [card("What makes ATP?", "Mitochondria.")])
     deck_id = client.get(f"/api/jobs/{first_job}").json()["deck_id"]
     first_package = client.get(f"/api/jobs/{first_job}/deck.apkg").content
     uuid = client.get(f"/api/decks/{deck_id}/ledger").json()["cards"][0]["card_uuid"]
@@ -190,7 +190,7 @@ def test_an_updated_card_lands_on_the_existing_note_and_keeps_its_scheduling(cli
 
         revised = run(
             client,
-            claude,
+            llm,
             [card("What makes most of the cell's ATP?", "The mitochondrion.", existing=uuid)],
             deck_id,
         )

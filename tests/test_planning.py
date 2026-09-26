@@ -26,8 +26,8 @@ def upload(client, text=b"Glycolysis occurs in the cytosol."):
     ).json()["job_id"]
 
 
-def test_planning_a_job_produces_a_deck_plan(client, claude):
-    claude.replies_json(PLAN)
+def test_planning_a_job_produces_a_deck_plan(client, llm):
+    llm.replies_json(PLAN)
     job_id = upload(client)
 
     response = client.post(f"/api/jobs/{job_id}/plan")
@@ -45,16 +45,16 @@ def test_planning_a_job_produces_a_deck_plan(client, claude):
     assert topics[0]["proposed_card_count"] == 6
 
 
-def test_the_plan_request_constrains_the_response_to_a_non_recursive_schema(client, claude):
-    claude.replies_json(PLAN)
+def test_the_plan_request_constrains_the_response_to_a_non_recursive_schema(client, llm):
+    llm.replies_json(PLAN)
     job_id = upload(client)
 
     client.post(f"/api/jobs/{job_id}/plan")
 
-    sent = claude.requests[0]
-    assert sent["model"] == "claude-sonnet-5"
+    sent = llm.requests[0]
+    assert sent["model"] == "gpt-5.6-luna"
 
-    schema = sent["output_config"]["format"]["schema"]
+    schema = sent["text"]["format"]["schema"]
     # Structured outputs reject recursive schemas outright, so the topic tree is
     # a flat array whose hierarchy lives in a "::" path string.
     assert schema["properties"]["topics"]["type"] == "array"
@@ -65,7 +65,7 @@ def test_the_plan_request_constrains_the_response_to_a_non_recursive_schema(clie
 
     # The document must be the first thing in the user message, so the same
     # cached prefix can serve the generation pass.
-    assert sent["messages"][0]["content"][0]["type"] == "document"
+    assert sent["input"][0]["content"][0]["type"] == "input_text"
 
 
 def json_dumps(value):

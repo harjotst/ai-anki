@@ -40,8 +40,8 @@ SAME_CARD_PLUS_A_NEW_ONE = {
 }
 
 
-def run(client, claude, cards=FIRST_CARDS, deck_id=None):
-    claude.counts_tokens(1000).replies_json(PLAN)
+def run(client, llm, cards=FIRST_CARDS, deck_id=None):
+    llm.counts_tokens(1000).replies_json(PLAN)
     body = {"deck_id": deck_id} if deck_id else {"deck_name": "Lecture"}
     job_id = client.post(
         "/api/jobs",
@@ -49,25 +49,25 @@ def run(client, claude, cards=FIRST_CARDS, deck_id=None):
         data=body,
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json(cards)
+    llm.replies_json(cards)
     client.post(f"/api/jobs/{job_id}/generate")
     return job_id
 
 
-def test_a_job_runs_against_a_deck_that_outlives_it(client, claude):
-    first = run(client, claude)
+def test_a_job_runs_against_a_deck_that_outlives_it(client, llm):
+    first = run(client, llm)
     deck_id = client.get(f"/api/jobs/{first}").json()["deck_id"]
     assert deck_id
 
-    second = run(client, claude, cards=SAME_CARD_PLUS_A_NEW_ONE, deck_id=deck_id)
+    second = run(client, llm, cards=SAME_CARD_PLUS_A_NEW_ONE, deck_id=deck_id)
 
     assert client.get(f"/api/jobs/{second}").json()["deck_id"] == deck_id
     # Two jobs, one deck: the deck is the thing being built up over a term.
     assert first != second
 
 
-def test_the_ledger_keeps_what_makes_a_reimport_non_destructive(client, claude):
-    job_id = run(client, claude)
+def test_the_ledger_keeps_what_makes_a_reimport_non_destructive(client, llm):
+    job_id = run(client, llm)
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
     client.get(f"/api/jobs/{job_id}/deck.apkg")
 
@@ -81,14 +81,14 @@ def test_the_ledger_keeps_what_makes_a_reimport_non_destructive(client, claude):
     assert entry["last_exported_front"] == "What makes ATP?"
 
 
-def test_regeneration_adds_new_cards_and_leaves_existing_ones_completely_alone(client, claude):
-    first = run(client, claude)
+def test_regeneration_adds_new_cards_and_leaves_existing_ones_completely_alone(client, llm):
+    first = run(client, llm)
     deck_id = client.get(f"/api/jobs/{first}").json()["deck_id"]
     client.get(f"/api/jobs/{first}/deck.apkg")
 
     original = client.get(f"/api/decks/{deck_id}/ledger").json()["cards"][0]["card_uuid"]
 
-    second = run(client, claude, cards=SAME_CARD_PLUS_A_NEW_ONE, deck_id=deck_id)
+    second = run(client, llm, cards=SAME_CARD_PLUS_A_NEW_ONE, deck_id=deck_id)
     package = client.get(f"/api/jobs/{second}/deck.apkg")
 
     # The unchanged card keeps its identity rather than being minted afresh.
@@ -102,9 +102,9 @@ def test_regeneration_adds_new_cards_and_leaves_existing_ones_completely_alone(c
     assert package.headers["x-notes-omitted-unchanged"] == "1"
 
 
-def test_an_unchanged_card_never_reaches_the_users_collection_a_second_time(client, claude):
+def test_an_unchanged_card_never_reaches_the_users_collection_a_second_time(client, llm):
     """Proven in a real collection, because this is the promise that matters."""
-    first = run(client, claude)
+    first = run(client, llm)
     deck_id = client.get(f"/api/jobs/{first}").json()["deck_id"]
     first_package = client.get(f"/api/jobs/{first}/deck.apkg").content
 
@@ -113,7 +113,7 @@ def test_an_unchanged_card_never_reaches_the_users_collection_a_second_time(clie
         guid = col.notes[0].guid
         col.set_scheduling(guid, interval=90, reps=40)
 
-        second = run(client, claude, cards=SAME_CARD_PLUS_A_NEW_ONE, deck_id=deck_id)
+        second = run(client, llm, cards=SAME_CARD_PLUS_A_NEW_ONE, deck_id=deck_id)
         outcome = col.import_package(client.get(f"/api/jobs/{second}/deck.apkg").content)
 
         assert outcome.new == 1, "only the genuinely new card arrives"
@@ -123,22 +123,22 @@ def test_an_unchanged_card_never_reaches_the_users_collection_a_second_time(clie
         assert "aianki::downgraded-cloze" not in col.note(guid).tags
 
 
-def test_the_deck_path_and_note_type_are_frozen_once_a_card_has_been_exported(client, claude):
-    first = run(client, claude)
+def test_the_deck_path_and_note_type_are_frozen_once_a_card_has_been_exported(client, llm):
+    first = run(client, llm)
     deck_id = client.get(f"/api/jobs/{first}").json()["deck_id"]
     client.get(f"/api/jobs/{first}/deck.apkg")
 
     moved_plan = {
         "topics": [{**PLAN["topics"][0], "path": "Bio::Reorganised::Cells", "note_type": "cloze"}]
     }
-    claude.counts_tokens(1000).replies_json(moved_plan)
+    llm.counts_tokens(1000).replies_json(moved_plan)
     job_id = client.post(
         "/api/jobs",
         files={"file": ("lecture.txt", b"Material.", "text/plain")},
         data={"deck_id": deck_id},
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json(FIRST_CARDS)
+    llm.replies_json(FIRST_CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
 
     entry = client.get(f"/api/decks/{deck_id}/ledger").json()["cards"][0]
@@ -149,25 +149,25 @@ def test_the_deck_path_and_note_type_are_frozen_once_a_card_has_been_exported(cl
     assert entry["note_type"] == "basic"
 
 
-def test_every_export_stamps_a_strictly_later_time_than_the_one_before(client, claude):
+def test_every_export_stamps_a_strictly_later_time_than_the_one_before(client, llm):
     """Carried finding from ticket 02, and a silent failure if it regresses.
 
     Anki's default is "update if newer", compared on note modification time. An
     export stamped at or before the previous one is filed as a duplicate and
     changes nothing, with no error anywhere.
     """
-    first = run(client, claude)
+    first = run(client, llm)
     deck_id = client.get(f"/api/jobs/{first}").json()["deck_id"]
     first_stamp = float(client.get(f"/api/jobs/{first}/deck.apkg").headers["x-export-timestamp"])
 
-    second = run(client, claude, cards=SAME_CARD_PLUS_A_NEW_ONE, deck_id=deck_id)
+    second = run(client, llm, cards=SAME_CARD_PLUS_A_NEW_ONE, deck_id=deck_id)
     second_stamp = float(client.get(f"/api/jobs/{second}/deck.apkg").headers["x-export-timestamp"])
 
     assert second_stamp > first_stamp
 
 
-def test_purging_removes_the_uploaded_sources_and_never_the_ledger(client, claude):
-    job_id = run(client, claude)
+def test_purging_removes_the_uploaded_sources_and_never_the_ledger(client, llm):
+    job_id = run(client, llm)
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
     client.get(f"/api/jobs/{job_id}/deck.apkg")
 

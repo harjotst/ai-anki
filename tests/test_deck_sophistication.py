@@ -46,17 +46,17 @@ def upload(client, text=b"Glycolysis material."):
     ).json()["job_id"]
 
 
-def generated(client, claude, cards=CARDS):
-    claude.replies_json(PLAN)
+def generated(client, llm, cards=CARDS):
+    llm.replies_json(PLAN)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json(cards)
+    llm.replies_json(cards)
     client.post(f"/api/jobs/{job_id}/generate")
     return job_id
 
 
-def test_cards_carry_topic_difficulty_source_page_and_job_tags(client, claude):
-    job_id = generated(client, claude)
+def test_cards_carry_topic_difficulty_source_page_and_job_tags(client, llm):
+    job_id = generated(client, llm)
 
     cards = client.get(f"/api/jobs/{job_id}/cards").json()["cards"]
 
@@ -69,8 +69,8 @@ def test_cards_carry_topic_difficulty_source_page_and_job_tags(client, claude):
     assert all(" " not in tag for tag in tags), "Anki splits tags on whitespace"
 
 
-def test_a_real_collection_shows_the_hierarchy_note_types_cloze_cards_and_tags(client, claude):
-    job_id = generated(client, claude)
+def test_a_real_collection_shows_the_hierarchy_note_types_cloze_cards_and_tags(client, llm):
+    job_id = generated(client, llm)
     package = client.get(f"/api/jobs/{job_id}/deck.apkg").content
 
     with anki_collection() as col:
@@ -90,7 +90,7 @@ def test_a_real_collection_shows_the_hierarchy_note_types_cloze_cards_and_tags(c
 
 
 def test_a_cloze_card_without_a_marker_is_downgraded_and_the_downgrade_is_recorded(
-    client, claude
+    client, llm
 ):
     broken = {
         "cards": [
@@ -102,7 +102,7 @@ def test_a_cloze_card_without_a_marker_is_downgraded_and_the_downgrade_is_record
             }
         ]
     }
-    job_id = generated(client, claude, cards=broken)
+    job_id = generated(client, llm, cards=broken)
 
     card = client.get(f"/api/jobs/{job_id}/cards").json()["cards"][0]
 
@@ -131,14 +131,14 @@ def test_the_note_type_definitions_are_frozen():
     assert [template["name"] for template in CLOZE_MODEL.templates] == ["Cloze"]
 
 
-def test_difficulty_shapes_the_question_style_not_only_the_card_count(client, claude):
-    claude.replies_json(PLAN)
+def test_difficulty_shapes_the_question_style_not_only_the_card_count(client, llm):
+    llm.replies_json(PLAN)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json(CARDS)
+    llm.replies_json(CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
 
-    instruction = claude.requests[-1]["messages"][0]["content"][-1]["text"].lower()
+    instruction = llm.requests[-1]["input"][0]["content"][-1]["text"].lower()
 
     assert "hard" in instruction
     # A hard topic must ask for more than definitions, or "difficulty" only ever
@@ -159,7 +159,7 @@ def test_only_leaf_decks_are_emitted_and_anki_fills_in_the_parents():
         assert "AI Anki::Biology" in col.decks
 
 
-def test_a_hard_card_is_still_one_question_with_one_answer(client, claude):
+def test_a_hard_card_is_still_one_question_with_one_answer(client, llm):
     """Measured on a real run: 9% of answers packed three or more facts.
 
     "Hard" was being read as "put more in it". A card whose answer is a list is
@@ -167,13 +167,13 @@ def test_a_hard_card_is_still_one_question_with_one_answer(client, claude):
     'again' for weeks and the schedule for everything around it degrades with
     it. Difficulty has to mean a harder question, not a longer answer.
     """
-    claude.replies_json(PLAN)
+    llm.replies_json(PLAN)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json(CARDS)
+    llm.replies_json(CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
 
-    instruction = claude.requests[-1]["messages"][0]["content"][-1]["text"].lower()
+    instruction = llm.requests[-1]["input"][0]["content"][-1]["text"].lower()
 
     # The constraint is stated for every difficulty, because it is the one rule
     # that a harder question makes it easier to break.

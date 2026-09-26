@@ -14,7 +14,7 @@ CARDS_WITH_A_BROKEN_CLOZE = {
             "back": "",
         },
         {
-            # Claude will occasionally emit a cloze card with no marker. genanki
+            # The model will occasionally emit a cloze card with no marker. genanki
             # 0.13.1 turns this into a note with ZERO cards, silently, and the
             # note still lands in the user's collection.
             "note_type": "cloze",
@@ -29,15 +29,15 @@ ONE_BASIC_CARD = {
 }
 
 
-def generated_job(client, claude, first=CARDS_WITH_A_BROKEN_CLOZE, second=ONE_BASIC_CARD):
-    job_id = planned_job(client, claude)
-    claude.replies_json(first).replies_json(second)
+def generated_job(client, llm, first=CARDS_WITH_A_BROKEN_CLOZE, second=ONE_BASIC_CARD):
+    job_id = planned_job(client, llm)
+    llm.replies_json(first).replies_json(second)
     client.post(f"/api/jobs/{job_id}/generate")
     return job_id
 
 
-def test_downloading_a_generated_deck_returns_an_apkg(client, claude):
-    job_id = generated_job(client, claude)
+def test_downloading_a_generated_deck_returns_an_apkg(client, llm):
+    job_id = generated_job(client, llm)
 
     response = client.get(f"/api/jobs/{job_id}/deck.apkg")
 
@@ -49,9 +49,9 @@ def test_downloading_a_generated_deck_returns_an_apkg(client, claude):
 
 
 def test_a_cloze_card_with_no_marker_is_downgraded_rather_than_silently_losing_its_cards(
-    client, claude
+    client, llm
 ):
-    job_id = generated_job(client, claude)
+    job_id = generated_job(client, llm)
 
     cards = client.get(f"/api/jobs/{job_id}/cards").json()["cards"]
 

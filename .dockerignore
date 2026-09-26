@@ -1,0 +1,17 @@
+# The server image needs app/, migrations/, alembic.ini and pyproject.toml.
+# Everything else is build context uploaded for nothing -- mobile/ alone is
+# half a gigabyte of node_modules -- and .env must never reach an image layer.
+.git
+mobile
+tests
+docs
+samples
+tools
+dev
+.scratch
+.local
+.env
+.env.*
+**/__pycache__
+*.egg-info
+.pytest_cache
