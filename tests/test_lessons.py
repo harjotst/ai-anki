@@ -56,14 +56,14 @@ def lesson_for(topic_id="cells"):
     return {**LESSON, "topic_id": topic_id}
 
 
-def planned(client, claude, plan=PLAN):
-    claude.replies_json(plan)
+def planned(client, llm, plan=PLAN):
+    llm.replies_json(plan)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
     return job_id
 
 
-def teach_and_generate(client, claude, job_id, plan=PLAN):
+def teach_and_generate(client, llm, job_id, plan=PLAN):
     """Answer every lesson call and every cards call, then run the job.
 
     Keyed on what each call asks for rather than on arrival order, because
@@ -72,77 +72,75 @@ def teach_and_generate(client, claude, job_id, plan=PLAN):
     """
     from tests.test_generation import CELL_CARDS
 
-    claude.answers(lesson=LESSON, cards=CELL_CARDS)
+    llm.answers(lesson=LESSON, cards=CELL_CARDS)
     return client.post(f"/api/jobs/{job_id}/generate")
 
 
 # --- the request ---------------------------------------------------------
 
 
-def test_a_lesson_is_written_for_every_topic_before_its_cards(client, claude):
+def test_a_lesson_is_written_for_every_topic_before_its_cards(client, llm):
     """Order is the point, not a detail.
 
     Cards reinforce comprehension; they do not create it. Generating them first
     would make the lesson a footnote to a deck the user already has.
     """
-    job_id = planned(client, claude)
+    job_id = planned(client, llm)
 
-    teach_and_generate(client, claude, job_id)
+    teach_and_generate(client, llm, job_id)
 
     schemas = [
-        request["output_config"]["format"]["schema"]["properties"].keys()
-        for request in claude.requests[1:]
+        request["text"]["format"]["schema"]["properties"].keys()
+        for request in llm.requests[1:]
     ]
     assert "sections" in list(schemas[0]), "the lesson call comes first"
     assert "cards" in list(schemas[1])
 
 
-def test_the_lesson_is_told_which_claims_this_topic_owns(client, claude):
+def test_the_lesson_is_told_which_claims_this_topic_owns(client, llm):
     """The same partition the cards use.
 
     A lesson that wanders into a neighbouring topic teaches the same thing
     twice, in two places, and the user meets it as a contradiction rather than
     as repetition.
     """
-    job_id = planned(client, claude)
-    teach_and_generate(client, claude, job_id)
+    job_id = planned(client, llm)
+    teach_and_generate(client, llm, job_id)
 
-    instruction = claude.requests[1]["messages"][0]["content"][-1]["text"]
+    instruction = llm.requests[1]["input"][0]["content"][-1]["text"]
     assert "Biology::Metabolism::Glycolysis" in instruction
     assert "teach" in instruction.lower()
 
 
-def test_lesson_calls_share_a_cache_with_each_other_and_not_with_the_cards(client, claude):
-    """Measured against the live API on 2026-08-17: a request carrying a
-    different JSON schema gets its own cache lineage, because structured
-    outputs render ahead of the messages.
+def test_lesson_calls_share_a_cache_with_each_other_and_not_with_the_cards(client, llm):
+    """A request carrying a different JSON schema gets its own cache lineage.
 
     So the lessons share a prefix among themselves and the cards share one among
-    themselves, and neither can read the other's. The five-minute lifetime is
-    right for both: they run back to back with no human pause between them, and
-    an hour costs 2x base input against 1.25x for five minutes.
+    themselves, and neither can read the other's. Both mark the same explicit
+    breakpoint on the documents and ask for the same lifetime.
     """
-    job_id = planned(client, claude)
-    teach_and_generate(client, claude, job_id)
+    job_id = planned(client, llm)
+    teach_and_generate(client, llm, job_id)
 
-    lesson_call, cards_call = claude.requests[1], claude.requests[2]
-    marker = lesson_call["messages"][0]["content"][0].get("cache_control")
-    assert marker == {"type": "ephemeral", "ttl": "5m"}
-    assert cards_call["messages"][0]["content"][0].get("cache_control") == marker
+    lesson_call, cards_call = llm.requests[1], llm.requests[2]
+    marker = lesson_call["input"][0]["content"][0].get("prompt_cache_breakpoint")
+    assert marker == {"mode": "explicit"}
+    assert cards_call["input"][0]["content"][0].get("prompt_cache_breakpoint") == marker
+    assert lesson_call["prompt_cache_options"] == cards_call["prompt_cache_options"]
     # Same documents, different schema -- which is exactly the pair that does
     # NOT share, and the reason each pass needs its own pacesetter.
     assert (
-        lesson_call["output_config"]["format"]["schema"]
-        != cards_call["output_config"]["format"]["schema"]
+        lesson_call["text"]["format"]["schema"]
+        != cards_call["text"]["format"]["schema"]
     )
 
 
 # --- what comes back -----------------------------------------------------
 
 
-def test_the_lesson_is_kept_and_read_back_per_topic(client, claude):
-    job_id = planned(client, claude)
-    teach_and_generate(client, claude, job_id)
+def test_the_lesson_is_kept_and_read_back_per_topic(client, llm):
+    job_id = planned(client, llm)
+    teach_and_generate(client, llm, job_id)
 
     lesson = client.get(f"/api/jobs/{job_id}/topics/glycolysis/lesson").json()
 
@@ -155,15 +153,15 @@ def test_the_lesson_is_kept_and_read_back_per_topic(client, claude):
     assert lesson["deck_path"] == "Biology::Metabolism::Glycolysis"
 
 
-def test_a_topic_with_no_lesson_yet_says_so_rather_than_failing(client, claude):
-    job_id = planned(client, claude)
+def test_a_topic_with_no_lesson_yet_says_so_rather_than_failing(client, llm):
+    job_id = planned(client, llm)
 
     missing = client.get(f"/api/jobs/{job_id}/topics/glycolysis/lesson")
 
     assert missing.status_code == 404
 
 
-def test_the_lessons_for_a_whole_job_are_listed_in_plan_order(client, claude):
+def test_the_lessons_for_a_whole_job_are_listed_in_plan_order(client, llm):
     """Plan order, not the order they finished in.
 
     Topics are taught in dependency order and they generate concurrently, so
@@ -179,20 +177,20 @@ def test_the_lessons_for_a_whole_job_are_listed_in_plan_order(client, claude):
         ]
     }
 
-    job_id = planned(client, claude, plan=ordered)
-    teach_and_generate(client, claude, job_id, plan=ordered)
+    job_id = planned(client, llm, plan=ordered)
+    teach_and_generate(client, llm, job_id, plan=ordered)
 
     listed = client.get(f"/api/jobs/{job_id}/lessons").json()["lessons"]
 
     assert [entry["topic_id"] for entry in listed] == ["t0", "t1", "t2"]
 
 
-def test_a_lesson_someone_else_owns_is_not_readable(boot, claude):
+def test_a_lesson_someone_else_owns_is_not_readable(boot, llm):
     from tests.conftest import SOMEBODY_ELSE
 
     with boot() as machine:
-        job_id = planned(machine, claude)
-        teach_and_generate(machine, claude, job_id)
+        job_id = planned(machine, llm)
+        teach_and_generate(machine, llm, job_id)
 
         machine.sign_in_as(SOMEBODY_ELSE)
 
@@ -203,17 +201,17 @@ def test_a_lesson_someone_else_owns_is_not_readable(boot, claude):
 # --- cost ----------------------------------------------------------------
 
 
-def test_a_lesson_is_billed_and_attributed_like_any_other_call(client, claude):
+def test_a_lesson_is_billed_and_attributed_like_any_other_call(client, llm):
     """Lessons roughly double what a job costs, so they cannot be invisible in
     the accounting -- the estimate before approval is the moment the user
     decides whether to spend it."""
     from tests.test_generation import CELL_CARDS
 
-    job_id = planned(client, claude)
-    claude.answers(
+    job_id = planned(client, llm)
+    llm.answers(
         lesson=LESSON,
         cards=CELL_CARDS,
-        usage={"input_tokens": 20, "cache_creation_input_tokens": 4000, "output_tokens": 900},
+        usage={"input_tokens": 20, "cache_write_tokens": 4000, "output_tokens": 900},
     )
     client.post(f"/api/jobs/{job_id}/generate")
 
@@ -228,13 +226,13 @@ def test_a_lesson_is_billed_and_attributed_like_any_other_call(client, claude):
     assert sum(call["cost_usd"] for call in taught) > total * 0.2
 
 
-def test_the_estimate_prices_the_lesson_pass_as_well_as_the_cards(client, claude):
+def test_the_estimate_prices_the_lesson_pass_as_well_as_the_cards(client, llm):
     """A quote that ignores half the work is a quote that will be wrong by
     half, at the exact moment somebody is deciding whether to spend it."""
     from app import ingestion
 
-    job_id = planned(client, claude)
-    claude.counts_tokens(200_000)
+    job_id = planned(client, llm)
+    llm.counts_tokens(200_000)
 
     estimate = client.get(f"/api/jobs/{job_id}/estimate").json()
 
@@ -249,7 +247,7 @@ def test_the_estimate_prices_the_lesson_pass_as_well_as_the_cards(client, claude
 # --- reading it while the rest is still being written --------------------
 
 
-def test_a_lesson_is_readable_before_the_whole_job_has_finished(client, claude):
+def test_a_lesson_is_readable_before_the_whole_job_has_finished(client, llm):
     """Ten minutes of a blank screen is the failure this prevents.
 
     Lessons are the slowest part of a job — around 4,000 output tokens each
@@ -261,15 +259,15 @@ def test_a_lesson_is_readable_before_the_whole_job_has_finished(client, claude):
 
     from tests.test_generation import CELL_CARDS
 
-    job_id = planned(client, claude)
+    job_id = planned(client, llm)
     # Every cards call hangs, so the job is still going while we look.
-    claude.answers(lesson=LESSON, cards=CELL_CARDS, pause={"cards": 1.5})
+    llm.answers(lesson=LESSON, cards=CELL_CARDS, pause={"cards": 1.5})
 
     running = threading.Thread(
         target=lambda: client.post(f"/api/jobs/{job_id}/generate"), daemon=True
     )
     running.start()
-    assert claude.wait_for_paused_call(timeout=5), "the first cards call should be open"
+    assert llm.wait_for_paused_call(timeout=5), "the first cards call should be open"
 
     mid_run = client.get(f"/api/jobs/{job_id}/lessons").json()["lessons"]
     assert len(mid_run) >= 1, "the first lesson is committed before its cards are asked for"
@@ -279,11 +277,11 @@ def test_a_lesson_is_readable_before_the_whole_job_has_finished(client, claude):
     running.join(timeout=30)
 
 
-def test_a_lesson_landing_is_reported_on_the_progress_log(client, claude):
+def test_a_lesson_landing_is_reported_on_the_progress_log(client, llm):
     """A client that was never connected can still reconstruct the run, so a
     lesson arriving has to be an event rather than only a row."""
-    job_id = planned(client, claude)
-    teach_and_generate(client, claude, job_id)
+    job_id = planned(client, llm)
+    teach_and_generate(client, llm, job_id)
 
     from tests.test_live_progress import sse_events
 
@@ -328,11 +326,11 @@ def test_text_that_was_already_correct_is_left_alone():
         assert readable(untouched) == untouched
 
 
-def test_a_lesson_is_cleaned_before_it_is_stored(client, claude):
+def test_a_lesson_is_cleaned_before_it_is_stored(client, llm):
     """Cleaned on the way in, not on the way out. Every reader would otherwise
     have to remember to do it, and one of them will not."""
-    job_id = planned(client, claude)
-    claude.answers(
+    job_id = planned(client, llm)
+    llm.answers(
         lesson={
             **LESSON,
             "in_one_line": "Glycolysis \\u2014 the anaerobic route.",

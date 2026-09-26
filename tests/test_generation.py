@@ -26,16 +26,16 @@ CELL_CARDS = {
 }
 
 
-def planned_job(client, claude):
-    claude.replies_json(PLAN)
+def planned_job(client, llm):
+    llm.replies_json(PLAN)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
     return job_id
 
 
-def test_generation_produces_cards_for_every_topic(client, claude):
-    job_id = planned_job(client, claude)
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+def test_generation_produces_cards_for_every_topic(client, llm):
+    job_id = planned_job(client, llm)
+    llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
 
     response = client.post(f"/api/jobs/{job_id}/generate")
 
@@ -52,15 +52,15 @@ def test_generation_produces_cards_for_every_topic(client, claude):
     assert len({c["card_uuid"] for c in cards}) == 3
 
 
-def test_each_topic_call_reuses_the_other_topic_calls_prefix(client, claude):
-    job_id = planned_job(client, claude)
-    claude.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
+def test_each_topic_call_reuses_the_other_topic_calls_prefix(client, llm):
+    job_id = planned_job(client, llm)
+    llm.replies_json(GLYCOLYSIS_CARDS).replies_json(CELL_CARDS)
 
     client.post(f"/api/jobs/{job_id}/generate")
 
     # The cards calls, asked for by kind. Each topic also makes a lesson call,
     # which shares a lineage with the other lessons and not with these.
-    topic_requests = claude.calls_for("cards")
+    topic_requests = llm.calls_for("cards")
     assert len(topic_requests) == 2
 
     first, *rest = topic_requests
@@ -69,10 +69,10 @@ def test_each_topic_call_reuses_the_other_topic_calls_prefix(client, claude):
         # calls share one prefix with EACH OTHER — the first writes it, the
         # rest read it. They do not share with the planning pass: measured on
         # 2026-08-17, a different JSON schema gets its own cache lineage.
-        assert request["system"] == first["system"]
-        assert request["messages"][0]["content"][0] == first["messages"][0]["content"][0]
+        assert request["instructions"] == first["instructions"]
+        assert request["input"][0]["content"][0] == first["input"][0]["content"][0]
 
     # The pass-specific instruction goes after the documents, never in system.
-    glycolysis_instruction = topic_requests[0]["messages"][0]["content"][-1]["text"]
+    glycolysis_instruction = topic_requests[0]["input"][0]["content"][-1]["text"]
     assert "Biology::Metabolism::Glycolysis" in glycolysis_instruction
     assert "6" in glycolysis_instruction

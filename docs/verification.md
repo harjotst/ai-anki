@@ -1,5 +1,10 @@
 # Verification report
 
+> **Model vendor, since 2026-09-26:** the app runs on OpenAI only (`gpt-5.6-luna`);
+> the Anthropic and Gemini providers were removed. This document records the original
+> design and the evidence gathered for it, when Claude was the model; the vendor-specific
+> details below are history. `docs/providers.md` describes what runs now.
+
 Evidence base for `docs/spec.md`. Produced by an 11-agent verification pass before implementation
 began: 7 agents fact-checking design assumptions against primary sources, then 4 adversarial
 critics reviewing the design given those findings.

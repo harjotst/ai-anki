@@ -1,54 +1,42 @@
-"""Swapping model vendors.
+"""The model vendor, behind a narrow interface.
 
-The interface is narrow on purpose. What differs between vendors is exactly the
-part that does not generalise — how a document is attached, how caching is
-expressed, how JSON is constrained, how a refusal is signalled — so all of it
-lives behind `Provider` and none of it leaks into the pipeline.
+OpenAI is the only vendor. What stays behind `Provider` is exactly the part that
+must not leak into the pipeline — how a document is attached, how caching is
+expressed, how JSON is constrained, how a refusal is signalled, what it costs.
 """
 
 import pytest
 
 from app import providers
 from app.providers import Capabilities, Prices, Reply, Usage
-from app.providers.anthropic_provider import AnthropicProvider
-from app.providers.gemini_provider import GeminiProvider
 from app.providers.openai_provider import OpenAIProvider
 
 
-def test_both_providers_satisfy_the_same_interface():
-    for provider in (
-        AnthropicProvider(object()),
-        GeminiProvider(object()),
-        OpenAIProvider(object()),
-    ):
-        assert isinstance(provider, providers.Provider)
-        assert provider.prices.verified_on, "a rate with no verification date is a guess"
+def test_the_provider_satisfies_the_interface_with_a_dated_price():
+    provider = OpenAIProvider(object())
+    assert isinstance(provider, providers.Provider)
+    assert provider.prices.verified_on, "a rate with no verification date is a guess"
 
 
 def test_an_unpriced_model_is_refused_rather_than_billed_at_a_guess(the_model="made-up-4"):
     with pytest.raises(ValueError, match="unpriced"):
-        AnthropicProvider(object(), model=the_model)
-    with pytest.raises(ValueError, match="unpriced"):
-        GeminiProvider(object(), model=the_model)
-    with pytest.raises(ValueError, match="unpriced"):
         OpenAIProvider(object(), model=the_model)
 
 
-def test_an_unknown_provider_is_refused_rather_than_defaulted():
-    # Silently falling back to a default the operator did not ask for is how you
-    # get a surprise bill from the vendor you thought you had switched away from.
-    with pytest.raises(ValueError, match="unknown provider"):
-        providers.build("acme-ai", client=object())
+def test_the_model_can_be_chosen_by_environment_among_priced_ones(monkeypatch):
+    monkeypatch.setenv("AI_ANKI_MODEL", "gpt-5.6-luna")
+    assert providers.build(client=object()).model == "gpt-5.6-luna"
+
+    monkeypatch.setenv("AI_ANKI_MODEL", "made-up-4")
+    with pytest.raises(ValueError, match="unpriced"):
+        providers.build(client=object())
 
 
-def test_the_provider_is_chosen_by_environment_so_swapping_is_a_redeploy(monkeypatch):
-    monkeypatch.setenv("AI_ANKI_PROVIDER", "gemini")
-    monkeypatch.setenv("AI_ANKI_MODEL", "gemini-3.1-flash-lite")
-
+def test_the_default_build_is_openai_and_passes_the_capability_gate():
     provider = providers.build(client=object())
-
-    assert provider.name == "gemini"
-    assert provider.model == "gemini-3.1-flash-lite"
+    assert provider.name == "openai"
+    assert provider.model == "gpt-5.6-luna"
+    assert not providers.check_usable(provider), "Luna must pass the capability gate"
 
 
 # --- the capability gate -------------------------------------------------
@@ -99,43 +87,16 @@ def test_a_fully_capable_provider_has_nothing_against_it():
 # --- pricing -------------------------------------------------------------
 
 
-def test_each_provider_prices_the_same_usage_with_its_own_rates():
+def test_usage_is_priced_at_the_models_own_rates():
     usage = Usage(input_tokens=1000, cache_write_tokens=200_000,
                   cache_read_tokens=1_600_000, output_tokens=14_000)
 
-    opus = AnthropicProvider(object(), model="claude-opus-5").prices.cost(usage)
-    sonnet = AnthropicProvider(object(), model="claude-sonnet-5").prices.cost(usage)
-    flash = GeminiProvider(object()).prices.cost(usage, cache_hours=1 / 6)
+    cost = OpenAIProvider(object()).prices.cost(usage)
 
-    # Worked independently: Opus 5 is 200k x $10 write + 1.6M x $0.50 read +
-    # 14k x $25 out + 1k x $5 in = $2.00 + $0.80 + $0.35 + $0.005 = $3.155.
-    assert abs(opus - 3.155) < 0.001
-    # Sonnet 5 on the identical request shape, for a one-line change.
-    assert sonnet < opus / 2
-    assert flash < opus / 5
-
-
-def test_only_google_rents_cached_content_by_the_hour():
-    usage = Usage(cache_write_tokens=200_000)
-
-    anthropic_cost = AnthropicProvider(object()).prices.cost(usage, cache_hours=10)
-    gemini_cost = GeminiProvider(object()).prices.cost(usage, cache_hours=10)
-
-    assert AnthropicProvider(object()).prices.storage_per_mtok_hour == 0.0
-    assert anthropic_cost == AnthropicProvider(object()).prices.cost(usage, cache_hours=0)
-    assert gemini_cost > GeminiProvider(object()).prices.cost(usage, cache_hours=0)
-
-
-def test_the_gemini_cache_write_rate_is_flagged_as_an_assumption():
-    from app.providers import gemini_provider
-
-    # Google publishes no cache-write multiplier anywhere. The headline saving
-    # rests on assuming creation bills at plain input rate, and that must not
-    # quietly become folklore.
-    assert gemini_provider.CACHE_WRITE_IS_ASSUMED is True
-    assert gemini_provider.MODELS["gemini-3.7-flash"].cache_write == (
-        gemini_provider.MODELS["gemini-3.7-flash"].input
-    )
+    # Worked independently at Luna's $0.20 in / $0.25 write / $0.02 read /
+    # $1.20 out per MTok: 1k x 0.20 + 200k x 0.25 + 1.6M x 0.02 + 14k x 1.20
+    # = $0.0002 + $0.05 + $0.032 + $0.0168 = $0.099.
+    assert abs(cost - 0.099) < 0.0001
 
 
 # --- request shape -------------------------------------------------------
@@ -150,45 +111,21 @@ def build(provider, cache="5m"):
     )
 
 
-def test_every_provider_puts_documents_first_and_the_instruction_last():
+def test_documents_go_first_and_the_instruction_last():
     # The shared prefix is the whole cost model. If the varying instruction ever
     # lands before the documents, nothing errors — the bill just multiplies.
-    anthropic_content = build(AnthropicProvider(object()))["messages"][0]["content"]
-    assert anthropic_content[0]["marker"] == 1
-    assert anthropic_content[-1]["text"] == "INSTRUCTION"
-
-    gemini_parts = build(GeminiProvider(object()))["contents"][0]["parts"]
-    assert gemini_parts[0]["marker"] == 1
-    assert gemini_parts[-1]["text"] == "INSTRUCTION"
-
     openai_content = build(OpenAIProvider(object()))["input"][0]["content"]
     assert openai_content[0]["marker"] == 1
     assert openai_content[-1] == {"type": "input_text", "text": "INSTRUCTION"}
 
 
-def test_anthropic_marks_exactly_one_breakpoint_on_the_last_document():
-    content = build(AnthropicProvider(object()))["messages"][0]["content"]
-
-    marked = [b for b in content if "cache_control" in b]
-    assert len(marked) == 1
-    assert marked[0]["marker"] == 2
-    assert marked[0]["cache_control"]["ttl"] == "5m"
-
-
 def test_asking_for_no_cache_marks_nothing_at_all():
     """A cache entry nothing reads still costs a write premium.
 
-    Measured against the live API on 2026-08-17: two requests carrying
-    different JSON schemas get different cache lineages however identical
-    their documents are. Caching a call whose schema nothing else shares is a
-    pure loss, so it has to be possible to decline.
+    Two requests carrying different JSON schemas get different cache lineages
+    however identical their documents are. Caching a call whose schema nothing
+    else shares is a pure loss, so it has to be possible to decline.
     """
-    content = build(AnthropicProvider(object()), cache=None)["messages"][0]["content"]
-    assert not any("cache_control" in block for block in content)
-
-    config = build(GeminiProvider(object()), cache=None)["config"]
-    assert "cached_content_ttl_seconds" not in config
-
     uncached = build(OpenAIProvider(object()), cache=None)
     assert "prompt_cache_options" not in uncached
     assert not any(
@@ -197,8 +134,8 @@ def test_asking_for_no_cache_marks_nothing_at_all():
 
 
 def test_openai_marks_exactly_one_explicit_breakpoint_on_the_last_document():
-    """Explicit rather than implicit, for the same reason Gemini's is: the
-    automatic kind is best-effort, and the cost model rests on the hits.
+    """Explicit rather than implicit: the automatic kind is best-effort, and
+    the cost model rests on the hits.
     Verified against the versioned docs 2026-08-26: `prompt_cache_options`
     with mode explicit, "30m" the only TTL GPT-5.6+ accepts."""
     request = build(OpenAIProvider(object()))
@@ -219,25 +156,16 @@ def test_openai_asks_for_strict_schema_enforcement():
     assert fmt["schema"] == SCHEMA
 
 
-def test_gemini_asks_for_an_explicit_cache_rather_than_a_best_effort_one():
-    config = build(GeminiProvider(object()))["config"]
-
-    # Implicit caching is free to store but its hits are best-effort, which is
-    # not good enough when the entire cost model rests on them.
-    assert config["cached_content_ttl_seconds"] == 5 * 60
-    assert config["response_json_schema"] == SCHEMA
-
-
-# --- the whole pipeline, on a vendor that is not Anthropic ---------------
+# --- the pipeline never builds a request by hand -----------------------
 
 
 class FakeVendor:
-    """A provider with a request shape deliberately unlike Anthropic's.
+    """A provider with a request shape deliberately unlike OpenAI's.
 
     The point is not to simulate any real vendor. It is to prove that nothing
     downstream of `Provider` knows or cares what the request looks like — if the
-    pipeline still produces a deck through this, the abstraction is real rather
-    than Anthropic wearing an interface.
+    pipeline still produces a deck through this, every pass really does go
+    through the provider rather than hand-building an OpenAI request.
     """
 
     name, model = "fakevendor", "fake-1"
@@ -257,7 +185,7 @@ class FakeVendor:
         return f"vendor-handle-{len(self.uploads)}"
 
     def document_block(self, *, path, filename, handle):
-        # Nothing like Anthropic's shape, on purpose.
+        # Nothing like OpenAI's shape, on purpose.
         return {"attachment": handle, "label": filename}
 
     def build_request(self, *, system, documents, instruction, schema, max_tokens, cache=None):
@@ -277,7 +205,7 @@ class FakeVendor:
         # Every topic is taught before it is drilled. These tests are about the
         # provider abstraction rather than about lessons, so a lesson call is
         # answered from stock instead of having to be scripted -- the same
-        # arrangement the Anthropic fake uses, for the same reason.
+        # arrangement the scripted OpenAI transport uses, for the same reason.
         if "sections" in (request["shape"].get("properties") or {}):
             return Reply(
                 data=STOCK_LESSON,
@@ -325,7 +253,7 @@ def vendor_client(tmp_path, pg_dsn, identities):
         yield client, vendor
 
 
-def test_a_deck_is_produced_end_to_end_on_a_non_anthropic_provider(vendor_client):
+def test_a_deck_is_produced_end_to_end_through_the_interface_alone(vendor_client):
     client, vendor = vendor_client
     vendor.scripted = [PLAN, CARDS]
 
@@ -357,13 +285,13 @@ def test_the_pipeline_sends_the_vendors_own_request_shape(vendor_client):
 
     # EVERY pass, not just the first. An earlier version of this test only
     # checked the planning call and missed that the generation pass was still
-    # building an Anthropic-shaped request by hand. Three now: plan, lesson,
+    # building a vendor-shaped request by hand. Three now: plan, lesson,
     # cards -- and the lesson pass is exactly the kind of addition that could
     # have quietly reintroduced the bug.
     assert len(vendor.sent) == 3
     for sent in vendor.sent:
         assert set(sent) == {"engine", "preamble", "payload", "shape", "ceiling"}
-        assert "output_config" not in sent and "messages" not in sent
+        assert "input" not in sent and "text" not in sent
         # The prefix discipline holds regardless of shape: documents first,
         # varying instruction last.
         assert sent["payload"][0]["label"] == "lecture.txt"
@@ -374,7 +302,7 @@ def test_the_pipeline_sends_the_vendors_own_request_shape(vendor_client):
     assert "one topic only" in cards_call["payload"][-1]["say"]
 
 
-def test_cost_is_billed_at_the_active_providers_rates_not_anthropics(vendor_client):
+def test_cost_is_billed_at_the_active_providers_rates(vendor_client):
     client, vendor = vendor_client
     vendor.scripted = [PLAN, CARDS]
 
@@ -411,128 +339,78 @@ def test_a_provider_that_fails_the_gate_is_rejected_at_startup(tmp_path, pg_dsn,
         )
 
 
-# --- counting a document that was uploaded rather than inlined -----------
+# --- counting: OpenAI has no counting endpoint ---------------------------
 
 
-class CountingClient:
-    """Stands in for the real endpoint's refusal to accept file sources.
-
-    Verbatim from the live API on 2026-08-21:
-        400 — "File sources are not supported in the token counting endpoint."
-    """
+class _Uploads:
+    """Just enough client for `upload`: the Files API hands back an id."""
 
     def __init__(self):
-        self.counted: list[dict] = []
-        self.beta = self
+        self.files = self
 
-    @property
-    def files(self):
-        return self
-
-    @property
-    def messages(self):
-        return self
-
-    def upload(self, file):
-        return type("Uploaded", (), {"id": "file_abc"})()
-
-    def count_tokens(self, *, model, system, messages, betas):
-        for message in messages:
-            for block in message.get("content", []):
-                source = block.get("source") if isinstance(block, dict) else None
-                if source and source.get("type") == "file":
-                    raise AssertionError(
-                        "File sources are not supported in the token counting endpoint"
-                    )
-        self.counted.append({"messages": messages})
-        return type("Counted", (), {"input_tokens": 4321})()
+    def create(self, *, file, purpose):
+        return type("Uploaded", (), {"id": "file-abc"})()
 
 
-def test_an_uploaded_document_is_counted_by_inlining_the_same_bytes(tmp_path):
-    """The admission gate has to work on the format the app actually uploads.
+def test_text_is_counted_with_the_tokenizer_and_documents_are_estimated_by_page(tmp_path):
+    """The admission gate has to work on what the app actually sends.
 
-    This was a live 500 on the first real PDF: the gate counted the assembled
-    request, the request referenced an uploaded file, and the endpoint refuses
-    file sources.
+    Text — the system prompt, the instruction, inlined notes — is counted with
+    the o200k tokenizer. An uploaded document has no local count, so it is
+    estimated from its page count, deliberately high.
     """
-    pdf = tmp_path / "metabolism.pdf"
-    pdf.write_bytes(b"%PDF-1.4\n" + b"x" * 2048)
+    import pypdfium2
 
-    client = CountingClient()
-    provider = AnthropicProvider(client)
+    from app.providers.openai_provider import TOKENS_PER_PAGE_ESTIMATE
+
+    pdf = tmp_path / "metabolism.pdf"
+    document = pypdfium2.PdfDocument.new()
+    document.new_page(612, 792)
+    document.new_page(612, 792)
+    document.save(str(pdf))
+    document.close()
+
+    provider = OpenAIProvider(_Uploads())
     handle = provider.upload(pdf, "metabolism.pdf")
     block = provider.document_block(path=pdf, filename="metabolism.pdf", handle=handle)
     request = provider.build_request(
         system="SYS", documents=[block], instruction="GO", schema=SCHEMA, max_tokens=100,
     )
 
-    assert request["messages"][0]["content"][0]["source"]["type"] == "file", (
-        "the request that gets SENT still references the upload"
+    assert request["input"][0]["content"][0] == {"type": "input_file", "file_id": "file-abc"}, (
+        "the request that gets SENT references the upload"
     )
-
     counted = provider.count_input_tokens(request)
-
-    assert counted == 4321
-    # ...but what was counted carried the bytes inline.
-    sent_for_counting = client.counted[0]["messages"][0]["content"][0]
-    assert sent_for_counting["source"]["type"] == "base64"
-    assert sent_for_counting["source"]["media_type"] == "application/pdf"
+    assert 2 * TOKENS_PER_PAGE_ESTIMATE < counted < 2 * TOKENS_PER_PAGE_ESTIMATE + 50
 
 
 def test_a_file_this_process_never_uploaded_is_estimated_rather_than_failing(tmp_path):
     """A resumed job runs in a process that did not do the uploading.
 
-    It has a file_id and no local copy, so exact counting is impossible. An
+    It has a file id and no local copy, so exact counting is impossible. An
     estimate keeps the gate working; failing here would strand the job.
     """
-    client = CountingClient()
-    provider = AnthropicProvider(client)
+    provider = OpenAIProvider(_Uploads())
     orphan = provider.document_block(
-        path=tmp_path / "gone.pdf", filename="gone.pdf", handle="file_from_another_process"
+        path=tmp_path / "gone.pdf", filename="gone.pdf", handle="file-from-another-process"
     )
     request = provider.build_request(
         system="SYS", documents=[orphan], instruction="GO", schema=SCHEMA, max_tokens=100,
     )
 
-    counted = provider.count_input_tokens(request)
-
-    # The measured remainder plus a pessimistic stand-in for the document.
-    assert counted > 4321, "the unknown document must contribute something"
+    assert provider.count_input_tokens(request) > 10_000, (
+        "the unknown document must contribute a pessimistic stand-in"
+    )
 
 
 def test_the_estimate_errs_high_because_that_is_the_cheaper_mistake(tmp_path):
-    from app.providers.anthropic_provider import TOKENS_PER_PAGE_ESTIMATE, estimate_document_tokens
+    from app.providers.openai_provider import TOKENS_PER_PAGE_ESTIMATE, estimate_document_tokens
 
-    # Claude bills every PDF page as extracted text AND a rendered image, so a
-    # page is thousands of tokens, not hundreds.
+    # A PDF page is read as extracted text AND a rendered image, so a page is
+    # thousands of tokens, not hundreds.
     assert TOKENS_PER_PAGE_ESTIMATE >= 3_000
     assert estimate_document_tokens(None) > 0
     assert estimate_document_tokens(tmp_path / "does-not-exist.pdf") > 0
-
-
-def test_fallbacks_goes_only_to_the_model_that_accepts_it(claude):
-    """Sonnet 5 refuses the whole request over a parameter Opus 5 accepts.
-
-    Not hypothetical: the live API answered 400 to a real planning run on
-    2026-08-26 (req_011CeQfD9jcBcLEpdiDRjox7) because `fallbacks` was sent
-    unconditionally. The transport in these tests now enforces the same
-    contract, so sending it to the wrong model fails loudly here first.
-    """
-    schema = {"type": "object", "additionalProperties": False, "properties": {}}
-
-    opus = AnthropicProvider(claude.client(), model="claude-opus-5")
-    claude.replies_json({})
-    opus.send(opus.build_request(
-        system="s", documents=[], instruction="i", schema=schema, max_tokens=64
-    ))
-    assert claude.requests[-1]["fallbacks"] == "default"
-
-    sonnet = AnthropicProvider(claude.client(), model="claude-sonnet-5")
-    claude.replies_json({})
-    sonnet.send(sonnet.build_request(
-        system="s", documents=[], instruction="i", schema=schema, max_tokens=64
-    ))
-    assert "fallbacks" not in claude.requests[-1]
 
 
 # --- the OpenAI send path, against a scripted client ----------------------
@@ -599,21 +477,10 @@ def test_openai_refusals_are_unusable_with_the_reason_kept():
         OpenAIProvider(client).send({"model": "gpt-5.6-luna"})
 
 
-def test_openai_is_reachable_by_environment_like_every_other_vendor(monkeypatch):
-    monkeypatch.setenv("AI_ANKI_PROVIDER", "openai")
-    monkeypatch.setenv("AI_ANKI_MODEL", "gpt-5.6-luna")
-
-    provider = providers.build(client=object())
-
-    assert provider.name == "openai"
-    assert provider.model == "gpt-5.6-luna"
-    assert not providers.check_usable(provider), "Luna must pass the capability gate"
-
-
-def test_a_file_handle_from_one_vendor_is_never_sent_to_another(pg_dsn, tmp_path):
-    """Vendor file ids mean nothing across vendors. A job planned on one and
-    generated on another must re-upload, not hand OpenAI an Anthropic id —
-    which is exactly what a provider switch mid-job used to do."""
+def test_a_file_handle_left_by_an_earlier_vendor_is_never_sent(pg_dsn, tmp_path):
+    """File ids mean nothing across vendors. A job whose sources were uploaded
+    to the vendor this app used before must re-upload to OpenAI, not hand it
+    an id it never issued."""
     from app import db, jobs
 
     class Vendor:
@@ -635,7 +502,7 @@ def test_a_file_handle_from_one_vendor_is_never_sent_to_another(pg_dsn, tmp_path
             conn, tmp_path, "notes.pdf", b"%PDF-1.4 stub", account_id=None, deck_name="Notes"
         )
 
-        first = Vendor("anthropic")
+        first = Vendor("previous-vendor")
         jobs.documents_for(conn, job_id, first)
         assert first.uploads == ["notes.pdf"]
 

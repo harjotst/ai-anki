@@ -6,18 +6,19 @@ import uuid as _uuid
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-import anthropic
 import httpx
+import openai
 import pytest
 from fastapi.testclient import TestClient
 
 from app import identity
 from app.main import create_app
+from app.providers.openai_provider import OpenAIProvider
 
 # --- who the tests are signed in as --------------------------------------
 #
 # Real RSA keys, real JWTs, real verification. Only the JWKS *fetch* is
-# replaced, which is the same seam `ClaudeScript` uses for the Anthropic
+# replaced, which is the same seam `ModelScript` uses for the OpenAI
 # transport: the application's own auth code runs in full, so a mistake in it
 # fails here rather than in front of somebody's decks.
 
@@ -95,7 +96,7 @@ class MachineKilled(BaseException):
     """The machine went away mid-call.
 
     It stands in for a SIGKILL, and being a `BaseException` is what makes it
-    faithful: the Anthropic SDK turns any `Exception` from the transport into an
+    faithful: the OpenAI SDK turns any `Exception` from the transport into an
     `APIConnectionError` and retries it, which is the opposite of a machine
     dying. Nothing recovers from this one — the process that hits it is
     finished, so whatever a job knows afterwards it committed beforehand.
@@ -119,28 +120,95 @@ STOCK_LESSON = {
     "check_yourself": ["Can you explain it without the notes?"],
 }
 
+MODEL = "gpt-5.6-luna"
 
-class ClaudeScript:
-    """A scripted Anthropic API, faked at the network transport only.
+
+def _wire_usage(usage: dict | None) -> dict:
+    """Usage as the Responses API reports it.
+
+    Tests speak in the application's own terms — uncached input, cache writes,
+    cache reads, output. OpenAI folds cached and written tokens INTO the input
+    count, so the wire total is the sum, and the provider has to take it apart
+    again. Faking it the vendor's way is what tests that arithmetic.
+    """
+    usage = {
+        "input_tokens": 100,
+        "cache_write_tokens": 0,
+        "cache_read_tokens": 0,
+        "output_tokens": 50,
+        **(usage or {}),
+    }
+    total_input = usage["input_tokens"] + usage["cache_write_tokens"] + usage["cache_read_tokens"]
+    return {
+        "input_tokens": total_input,
+        "input_tokens_details": {
+            "cached_tokens": usage["cache_read_tokens"],
+            "cache_write_tokens": usage["cache_write_tokens"],
+        },
+        "output_tokens": usage["output_tokens"],
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": total_input + usage["output_tokens"],
+    }
+
+
+def _response(content: list[dict], *, usage: dict | None = None, status: str = "completed",
+              incomplete_reason: str | None = None) -> dict:
+    return {
+        "id": "resp_scripted",
+        "object": "response",
+        "created_at": 0,
+        "model": MODEL,
+        "status": status,
+        "incomplete_details": {"reason": incomplete_reason} if incomplete_reason else None,
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_scripted",
+                "status": status,
+                "role": "assistant",
+                "content": content,
+            }
+        ],
+        "usage": _wire_usage(usage),
+    }
+
+
+def _text_response(text: str, usage: dict | None = None, *, truncated: bool = False) -> dict:
+    return _response(
+        [{"type": "output_text", "text": text, "annotations": []}],
+        usage=usage,
+        status="incomplete" if truncated else "completed",
+        incomplete_reason="max_output_tokens" if truncated else None,
+    )
+
+
+class ModelScript:
+    """A scripted OpenAI API, faked at the network transport only.
 
     The real SDK stays in the loop — only the HTTP boundary is replaced — so SDK
     misuse still fails tests and the application needs no test-only seam of its
     own. Tests queue response bodies; requests are recorded for assertions.
+
+    Token counting is the one exception. OpenAI has no counting endpoint, so
+    the provider counts locally; `counts_tokens` scripts that answer through
+    `ScriptedCountProvider`, which is how a test says "this job is huge"
+    without shipping a huge document.
     """
 
     def __init__(self):
         self._queued: list[tuple[object, float]] = []
         self.requests: list[dict] = []
-        # The admission gate and the Files API are separate endpoints; keeping
-        # their traffic apart is what lets a test say "nothing was generated".
+        # The admission gate and the Files API are separate from generation;
+        # keeping their traffic apart is what lets a test say "nothing was
+        # generated".
         self.count_requests: list[dict] = []
         self.file_requests: list[httpx.Request] = []
         self._token_counts: list[int] = []
         self._uploads: list[str] = []
         self._paused = threading.Event()
-        # How many message calls are in flight at once, and the high-water mark.
-        # This is what lets a test assert the SHAPE of the fan-out rather than
-        # its wall-clock, which would be flaky.
+        # How many calls are in flight at once, and the high-water mark. This
+        # is what lets a test assert the SHAPE of the fan-out rather than its
+        # wall-clock, which would be flaky.
         self._by_kind: dict = {}
         self._kind_usage: dict | None = None
         self._kind_pause: dict = {}
@@ -153,35 +221,18 @@ class ClaudeScript:
         self,
         text: str,
         *,
-        stop_reason: str = "end_turn",
+        truncated: bool = False,
         usage: dict | None = None,
         pause: float = 0.0,
     ):
-        """Queue a normal assistant reply whose single text block is `text`.
+        """Queue a normal reply whose output text is `text`.
 
+        `truncated` ends it the way running out of output tokens does.
         `pause` holds the call open, the way a real topic call does for minutes
         at a time — long enough for something else to happen to the machine
         while it is waiting.
         """
-        self._queue(
-            {
-                "id": f"msg_{len(self._queued)}",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-sonnet-5",
-                "content": [{"type": "text", "text": text}],
-                "stop_reason": stop_reason,
-                "stop_sequence": None,
-                "usage": {
-                    "input_tokens": 100,
-                    "output_tokens": 50,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    **(usage or {}),
-                },
-            },
-            pause,
-        )
+        self._queue(_text_response(text, usage, truncated=truncated), pause)
         return self
 
     def replies_json(self, payload: dict, **kwargs):
@@ -214,16 +265,15 @@ class ClaudeScript:
     def calls_for(self, kind: str) -> list[dict]:
         """Every request that asked for one kind of thing.
 
-        Tests that used to say "requests[1:] are the topic calls" cannot any
-        more: each topic makes two, and they interleave. Asking by kind says
-        what was meant.
+        Each topic makes two calls, and they interleave, so asking by kind says
+        what was meant where call order cannot.
         """
         return [r for r in self.requests if self._kind_of(r) == kind]
 
     @staticmethod
     def _kind_of(request: dict) -> str | None:
         """What a request is asking for, read off its response schema."""
-        schema = (request.get("output_config") or {}).get("format", {}).get("schema", {})
+        schema = ((request.get("text") or {}).get("format") or {}).get("schema", {})
         properties = set(schema.get("properties") or {})
         if "topics" in properties:
             return "topics"
@@ -233,24 +283,13 @@ class ClaudeScript:
             return "lesson"
         return None
 
-    def refuses(self, category: str = "bio"):
-        """Queue a safety refusal — HTTP 200, empty content, no text block."""
+    def refuses(self, reason: str = "I can't help with that."):
+        """Queue a safety refusal — HTTP 200, a refusal part, no text."""
         self._queue(
-            {
-                "id": f"msg_{len(self._queued)}",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-sonnet-5",
-                "content": [],
-                "stop_reason": "refusal",
-                "stop_details": {
-                    "type": "refusal",
-                    "category": category,
-                    "explanation": "declined",
-                },
-                "stop_sequence": None,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
-            }
+            _response(
+                [{"type": "refusal", "refusal": reason}],
+                usage={"input_tokens": 0, "output_tokens": 0},
+            )
         )
         return self
 
@@ -278,6 +317,10 @@ class ClaudeScript:
         self._token_counts.append(input_tokens)
         return self
 
+    def count(self, request: dict) -> int:
+        self.count_requests.append(request)
+        return self._token_counts.pop(0) if self._token_counts else 1000
+
     @property
     def uploads(self) -> list[str]:
         """Filenames sent to the Files API, in order."""
@@ -290,29 +333,24 @@ class ClaudeScript:
         path = request.url.path
 
         # The Files API is multipart, not JSON, so it is answered before the
-        # JSON-decoding the Messages endpoints rely on.
+        # JSON-decoding the Responses endpoint relies on.
         if path.endswith("/v1/files"):
             self.file_requests.append(request)
             name = _multipart_filename(request.content) or f"upload-{len(self._uploads)}"
             self._uploads.append(name)
-            file_id = f"file_{len(self._uploads) - 1:04d}"
+            file_id = f"file-{len(self._uploads) - 1:04d}"
             return httpx.Response(
                 200,
                 json={
                     "id": file_id,
-                    "type": "file",
+                    "object": "file",
+                    "bytes": len(request.content),
+                    "created_at": 0,
                     "filename": name,
-                    "mime_type": "application/pdf",
-                    "size_bytes": len(request.content),
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "downloadable": False,
+                    "purpose": "user_data",
+                    "status": "processed",
                 },
             )
-
-        if path.endswith("/count_tokens"):
-            self.count_requests.append(json.loads(request.content))
-            counted = self._token_counts.pop(0) if self._token_counts else 1000
-            return httpx.Response(200, json={"input_tokens": counted})
 
         with self._lock:
             self.requests.append(json.loads(request.content))
@@ -326,25 +364,6 @@ class ClaudeScript:
                 self.overlapped_with_first = True
         request = self.requests[index]
 
-        # The live API's contract, enforced so the suite refuses what the real
-        # endpoint refuses. Sonnet 5 answers 400 to `fallbacks` (verified live
-        # 2026-08-26, req_011CeQfD9jcBcLEpdiDRjox7 — it took down a planning
-        # run); only Opus 5 accepts the parameter.
-        if "fallbacks" in request and request.get("model") != "claude-opus-5":
-            with self._lock:
-                self._in_flight -= 1
-            return httpx.Response(
-                400,
-                json={
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": f"'{request.get('model')}' does not support"
-                        " the `fallbacks` parameter.",
-                    },
-                },
-            )
-
         kind = self._kind_of(request)
         if kind == "lesson" and "lesson" not in self._by_kind:
             # Every topic is taught before it is drilled, so a lesson call now
@@ -352,16 +371,18 @@ class ClaudeScript:
             # tests that are about something else -- slot matching, budgets,
             # shutdown -- from having to know lessons exist at all. A test that
             # cares what was taught says so with `answers(lesson=...)`.
-            return httpx.Response(200, json=self._as_message(STOCK_LESSON))
+            with self._lock:
+                self._in_flight -= 1
+            return httpx.Response(200, json=_text_response(json.dumps(STOCK_LESSON)))
         if kind in self._by_kind:
             answer = self._by_kind[kind]
-            body = self._as_message(
-                answer(request) if callable(answer) else answer, self._kind_usage
+            body = _text_response(
+                json.dumps(answer(request) if callable(answer) else answer), self._kind_usage
             )
             pause = self._kind_pause.get(kind, 0.0)
         elif not self._queued:
             raise AssertionError(
-                f"Claude was called {len(self.requests)} time(s) but only "
+                f"The model was called {len(self.requests)} time(s) but only "
                 f"{len(self.requests) - 1} response(s) were scripted"
             )
         else:
@@ -377,52 +398,48 @@ class ClaudeScript:
             return httpx.Response(
                 body["__error_status__"],
                 json={
-                    "type": "error",
                     "error": {
-                        "type": "invalid_request_error",
                         "message": body["__error_message__"],
-                    },
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": None,
+                    }
                 },
             )
         return httpx.Response(200, json=body)
 
-    def _as_message(self, payload: dict, usage: dict | None = None) -> dict:
-        return {
-            "id": f"msg_{len(self.requests)}",
-            "type": "message",
-            "role": "assistant",
-            "model": "claude-sonnet-5",
-            "content": [{"type": "text", "text": json.dumps(payload)}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {
-                "input_tokens": 100,
-                "output_tokens": 50,
-                "cache_creation_input_tokens": 0,
-                "cache_read_input_tokens": 0,
-                **(usage or {}),
-            },
-        }
-
-    def client(self) -> anthropic.Anthropic:
-        return anthropic.Anthropic(
+    def client(self) -> openai.OpenAI:
+        return openai.OpenAI(
             api_key="test-key-not-real",
             http_client=httpx.Client(transport=httpx.MockTransport(self._handle)),
         )
 
 
+class ScriptedCountProvider(OpenAIProvider):
+    """The real OpenAI provider, with its local token count scripted.
+
+    Everything else — request shapes, uploads, usage, refusals — runs as it
+    does in production.
+    """
+
+    def __init__(self, script: ModelScript, **kwargs):
+        super().__init__(script.client(), **kwargs)
+        self._script = script
+
+    def count_input_tokens(self, request: dict) -> int:
+        return self._script.count(request)
+
+
 @pytest.fixture(autouse=True)
-def _no_ambient_vendor(monkeypatch):
-    """The suite scripts an Anthropic transport; an operator's shell — where
-    AI_ANKI_PROVIDER may point at a different vendor entirely — must not be
-    able to point the scripted machine somewhere the script cannot answer."""
-    monkeypatch.delenv("AI_ANKI_PROVIDER", raising=False)
+def _no_ambient_model(monkeypatch):
+    """An operator's shell may set AI_ANKI_MODEL; the scripted machine must
+    not quietly run as some other model than the one the tests price."""
     monkeypatch.delenv("AI_ANKI_MODEL", raising=False)
 
 
 @pytest.fixture
-def claude():
-    return ClaudeScript()
+def llm():
+    return ModelScript()
 
 
 @pytest.fixture
@@ -431,7 +448,7 @@ def identities():
 
 
 @pytest.fixture
-def boot(tmp_path, claude, pg_dsn, identities):
+def boot(tmp_path, llm, pg_dsn, identities):
     """Start an application over the volume.
 
     The database and data directory are the same on every call, so a second call
@@ -470,11 +487,11 @@ def boot(tmp_path, claude, pg_dsn, identities):
 
     def _boot(**settings) -> TestClient:
         settings.setdefault("verifier", identities.verifier())
+        settings.setdefault("provider", ScriptedCountProvider(llm))
         return Machine(
             create_app(
                 database_url=pg_dsn,
                 data_dir=tmp_path / "data",
-                anthropic_client=claude.client(),
                 **settings,
             ),
             # Over https, because the application is served that way and a
@@ -487,7 +504,7 @@ def boot(tmp_path, claude, pg_dsn, identities):
 
 @pytest.fixture
 def client(boot):
-    """A test client over a throwaway database and a scripted Claude.
+    """A test client over a throwaway database and a scripted model.
 
     Tests drive the application through its HTTP boundary. Nothing below this
     seam is reached into directly.

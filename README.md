@@ -42,11 +42,10 @@ sees is a note whose scheduling, tags and leech flags survive untouched.
 ## Things that were measured rather than assumed
 
 **Prompt caching has a lineage, and it is not the one you would guess.** Pass 1 was
-writing a cache entry that pass 2 could never read. Two experiments against the live
-API settled why: structured outputs render *ahead* of the messages, so a request
-carrying a different JSON schema gets its own cache lineage entirely. Pass 1 was paying
-a 2× write premium for an entry nothing read. Removing it, and dropping pass 2 from a
-1-hour to a 5-minute TTL, cut a real run's cost by roughly a third.
+writing a cache entry that pass 2 could never read: a request carrying a different JSON
+schema gets its own cache lineage entirely, so pass 1 was paying a write premium for an
+entry nothing read. Pass 1 is now uncached, and each later pass shares one prefix with
+itself.
 
 **A flat fan-out costs more than no caching at all.** Topics generate concurrently, but
 the first one runs *alone*. A cache entry only becomes readable once the first response
@@ -57,10 +56,6 @@ one cache write and four reads.
 **Anki silently ignores an export whose timestamp does not advance.** It compares note
 modification times and files a non-advancing export as a duplicate — no error, no
 change. Monotonicity is enforced in code rather than trusted to the wall clock.
-
-**The token-counting endpoint refuses uploaded files.** Found as a live 500 on the first
-real PDF, because the pre-flight verification had only used text documents. Documents
-are now inlined for counting and sent by reference.
 
 **`pg_dump` refuses to dump a server newer than itself,** and Debian ships client 15.
 Found by building the image and running a restore, not by reading about it.
@@ -74,11 +69,11 @@ Found by building the image and running a restore, not by reading about it.
 | **Backend** | FastAPI, Postgres (psycopg 3), Alembic |
 | **Auth** | Supabase — Google, Apple, email |
 | **App** | Expo (React Native) — iOS and Android, in `mobile/` |
-| **Generation** | Anthropic API, three passes, prompt caching, structured outputs |
+| **Generation** | OpenAI Responses API (`gpt-5.6-luna`), three passes, prompt caching, strict structured outputs |
 | **Packaging** | genanki, with the official `anki` package as a *test-only* dependency |
 | **Deployment** | Fly.io, one machine, LibreOffice for conversion |
 
-**235 tests, and only two seams.** The Anthropic API is faked at the HTTP transport
+**Nearly 300 tests, and only two seams.** The OpenAI API is faked at the HTTP transport
 only, so the real SDK stays in the loop and SDK misuse still fails a test. The database
 is a real Postgres in a container, because a fake would accept queries the real server
 rejects. Everything else drives the application through its own HTTP boundary — which
@@ -102,7 +97,7 @@ python -m pytest -q
 
 The suite starts its own Postgres in a container, so it needs Docker and nothing else.
 
-To run the application you need an Anthropic API key, a Postgres URL and a Supabase
+To run the application you need an OpenAI API key, a Postgres URL and a Supabase
 project; `docs/operations.md` has the deployment runbook, the spend controls and the
 restore procedure.
 
@@ -110,11 +105,11 @@ restore procedure.
 
 ## What it costs
 
-Measured on real runs: a 52,000-token biochemistry PDF produced 24 topics and 164 cards
-for **$2.75**. Teaching those same topics adds about **$3.80** — the first lesson writes
-the cache and costs $0.64, every one after it reads and costs $0.14. The estimate is
-shown before you approve the plan, priced against the plan you are actually looking at
-rather than an assumed topic count, and it counts both passes.
+Priced at GPT-5.6 Luna's rates ($0.20 in, $1.20 out, $0.25 cache write, $0.02 cache
+read, per million tokens), a 200,000-token document planned into 8 topics comes to
+roughly **$0.20** for lessons and cards together; `docs/providers.md` has the rates. The
+estimate is shown before you approve the plan, priced against the plan you are actually
+looking at rather than an assumed topic count, and it counts both passes.
 
 Spend is bounded at four layers: a per-job token ceiling, rolling 24-hour budgets per
 person and overall, a kill switch that works without a redeploy, and the provider-side
@@ -139,5 +134,5 @@ a marketing word.
 - [`docs/operations.md`](docs/operations.md) — deploy, backup, restore, spend controls
 - [`docs/verification.md`](docs/verification.md) — claims checked against primary
   sources, including the ones that turned out to be wrong
-- [`docs/providers.md`](docs/providers.md) — the provider abstraction and a cost
-  comparison across vendors
+- [`docs/providers.md`](docs/providers.md) — the model, its capability gate and its
+  rates

@@ -16,8 +16,8 @@ from tests.test_planning import PLAN, upload
 # --- jobs ----------------------------------------------------------------
 
 
-def test_a_job_is_findable_again_once_the_tab_that_started_it_is_gone(client, claude):
-    claude.replies_json(PLAN)
+def test_a_job_is_findable_again_once_the_tab_that_started_it_is_gone(client, llm):
+    llm.replies_json(PLAN)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
 
@@ -32,7 +32,7 @@ def test_a_job_is_findable_again_once_the_tab_that_started_it_is_gone(client, cl
     assert entry["created_at"]
 
 
-def test_the_job_list_puts_the_most_recent_first(client, claude):
+def test_the_job_list_puts_the_most_recent_first(client, llm):
     first = upload(client)
     second = upload(client)
 
@@ -41,16 +41,16 @@ def test_the_job_list_puts_the_most_recent_first(client, claude):
     assert listed == [second, first]
 
 
-def test_the_job_list_reports_how_many_cards_are_waiting(client, claude):
+def test_the_job_list_reports_how_many_cards_are_waiting(client, llm):
     from tests.test_plan_and_review import generated
 
-    job_id = generated(client, claude)
+    job_id = generated(client, llm)
 
     entry = next(j for j in client.get("/api/jobs").json()["jobs"] if j["job_id"] == job_id)
     assert entry["card_count"] == 2
 
 
-def test_one_persons_job_list_never_shows_another_persons_jobs(boot, claude):
+def test_one_persons_job_list_never_shows_another_persons_jobs(boot, llm):
     with boot() as machine:
 
         machine.sign_in_as(TESTER)
@@ -68,10 +68,10 @@ def test_one_persons_job_list_never_shows_another_persons_jobs(boot, claude):
 # --- decks ---------------------------------------------------------------
 
 
-def test_a_deck_says_how_much_is_in_it_and_when_it_was_last_exported(client, claude):
+def test_a_deck_says_how_much_is_in_it_and_when_it_was_last_exported(client, llm):
     from tests.test_plan_and_review import generated
 
-    job_id = generated(client, claude)
+    job_id = generated(client, llm)
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
 
     deck = next(d for d in client.get("/api/decks").json()["decks"] if d["deck_id"] == deck_id)
@@ -88,7 +88,7 @@ def test_a_deck_says_how_much_is_in_it_and_when_it_was_last_exported(client, cla
     assert after["last_exported_at"] is not None
 
 
-def test_a_deck_can_be_renamed(client, claude):
+def test_a_deck_can_be_renamed(client, llm):
     job_id = upload(client)
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
     assert client.get("/api/decks").json()["decks"][0]["name"] == "Lecture"
@@ -99,14 +99,14 @@ def test_a_deck_can_be_renamed(client, claude):
     assert client.get("/api/decks").json()["decks"][0]["name"] == "Biochem 301"
 
 
-def test_a_deck_name_that_anki_cannot_use_is_refused(client, claude):
+def test_a_deck_name_that_anki_cannot_use_is_refused(client, llm):
     job_id = upload(client)
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
 
     assert client.patch(f"/api/decks/{deck_id}", json={"name": "   "}).status_code == 422
 
 
-def test_one_persons_deck_list_never_shows_another_persons_decks(boot, claude):
+def test_one_persons_deck_list_never_shows_another_persons_decks(boot, llm):
     with boot() as machine:
 
         machine.sign_in_as(TESTER)

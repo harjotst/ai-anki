@@ -23,11 +23,11 @@ WEEK_TWO_PLAN = {
 }
 
 
-def exported_deck(client, claude):
+def exported_deck(client, llm):
     """A deck with one job in it, downloaded, so its cards count as exported."""
     from tests.test_plan_and_review import generated
 
-    job_id = generated(client, claude)
+    job_id = generated(client, llm)
     client.get(f"/api/jobs/{job_id}/deck.apkg")
     return client.get(f"/api/jobs/{job_id}").json()["deck_id"], job_id
 
@@ -40,8 +40,8 @@ def continue_deck(client, deck_id, name="week-two.txt"):
     ).json()["job_id"]
 
 
-def test_a_second_job_can_be_pointed_at_a_deck_that_already_exists(client, claude):
-    deck_id, first = exported_deck(client, claude)
+def test_a_second_job_can_be_pointed_at_a_deck_that_already_exists(client, llm):
+    deck_id, first = exported_deck(client, llm)
 
     second = continue_deck(client, deck_id)
 
@@ -51,14 +51,14 @@ def test_a_second_job_can_be_pointed_at_a_deck_that_already_exists(client, claud
     assert deck["job_count"] == 2
 
 
-def test_planning_a_continuation_is_told_what_the_deck_already_covers(client, claude):
-    deck_id, _ = exported_deck(client, claude)
+def test_planning_a_continuation_is_told_what_the_deck_already_covers(client, llm):
+    deck_id, _ = exported_deck(client, llm)
     job_id = continue_deck(client, deck_id)
 
-    claude.replies_json(WEEK_TWO_PLAN)
+    llm.replies_json(WEEK_TWO_PLAN)
     assert client.post(f"/api/jobs/{job_id}/plan").status_code == 200
 
-    instruction = claude.requests[-1]["messages"][0]["content"][-1]["text"]
+    instruction = llm.requests[-1]["input"][0]["content"][-1]["text"]
     # The existing topic, by the identifier a later plan has to reuse verbatim
     # for a slot match to be possible at all.
     assert "cells" in instruction
@@ -66,21 +66,21 @@ def test_planning_a_continuation_is_told_what_the_deck_already_covers(client, cl
     assert "reuse" in instruction.lower()
 
 
-def test_a_fresh_deck_is_not_told_about_topics_that_do_not_exist(client, claude):
-    claude.replies_json(PLAN)
+def test_a_fresh_deck_is_not_told_about_topics_that_do_not_exist(client, llm):
+    llm.replies_json(PLAN)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
 
-    instruction = claude.requests[-1]["messages"][0]["content"][-1]["text"]
+    instruction = llm.requests[-1]["input"][0]["content"][-1]["text"]
     assert "EXISTING TOPICS" not in instruction
 
 
-def test_a_continuation_that_reuses_a_topic_id_finds_the_cards_to_revise(client, claude):
+def test_a_continuation_that_reuses_a_topic_id_finds_the_cards_to_revise(client, llm):
     """The payoff: pass 2 for a reused topic is handed the existing cards."""
-    deck_id, _ = exported_deck(client, claude)
+    deck_id, _ = exported_deck(client, llm)
     job_id = continue_deck(client, deck_id)
 
-    claude.replies_json(
+    llm.replies_json(
         {
             "topics": [
                 {
@@ -98,16 +98,16 @@ def test_a_continuation_that_reuses_a_topic_id_finds_the_cards_to_revise(client,
 
     from tests.test_slot_matching import card
 
-    claude.replies_json({"cards": [card("Q2?", "A revised answer.")]})
+    llm.replies_json({"cards": [card("Q2?", "A revised answer.")]})
     client.post(f"/api/jobs/{job_id}/generate")
 
-    cards_call = claude.requests[-1]["messages"][0]["content"][-1]["text"]
+    cards_call = llm.requests[-1]["input"][0]["content"][-1]["text"]
     assert "EXISTING CARDS already in the user's collection" in cards_call
     # Which is what lets the model declare a revision rather than a new card.
     assert "existing_card_id" in cards_call
 
 
-def test_a_continuation_of_a_deck_you_do_not_own_is_refused(boot, claude):
+def test_a_continuation_of_a_deck_you_do_not_own_is_refused(boot, llm):
     from tests.conftest import SOMEBODY_ELSE, TESTER
 
     with boot() as machine:

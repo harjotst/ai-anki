@@ -8,7 +8,6 @@ count can differ several-fold in cost.
 
 from __future__ import annotations
 
-import mimetypes
 from pathlib import Path
 
 from app import conversion
@@ -17,18 +16,9 @@ from app import conversion
 # for the plan, the cards, and the thinking that produces them.
 TOKEN_CEILING = 700_000
 
-# Anything at or above this is uploaded rather than inlined. A request is capped
-# at 32MB whatever the context window allows, and the Files API is the only way
-# past it.
-INLINE_LIMIT_BYTES = 256 * 1024
-
-FILES_BETA = "files-api-2025-04-14"
-
 # What an estimate assumes before a plan exists to count.
 ASSUMED_TOPICS = 8
 ASSUMED_OUTPUT_TOKENS = 15_000
-
-INLINE_TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".text"}
 
 
 class TooLarge(Exception):
@@ -42,50 +32,12 @@ class TooLarge(Exception):
         )
 
 
-def media_type(path: Path) -> str:
-    guessed, _ = mimetypes.guess_type(path.name)
-    return guessed or "application/octet-stream"
-
-
-def is_inline_text(path: Path) -> bool:
-    return path.suffix.lower() in INLINE_TEXT_SUFFIXES
-
-
-def text_document(text: str, filename: str) -> dict:
-    return {
-        "type": "document",
-        "source": {"type": "text", "media_type": "text/plain", "data": text},
-        "title": filename,
-    }
-
-
-def file_document(file_id: str, filename: str) -> dict:
-    return {
-        "type": "document",
-        "source": {"type": "file", "file_id": file_id},
-        "title": filename,
-    }
-
-
 def upload_source(provider, path: Path, filename: str) -> str | None:
     """Put one source in front of the model, returning its handle.
 
     None means this provider inlines the file instead of uploading it.
     """
     return provider.upload(path, filename)
-
-
-def image_block(path: Path) -> dict:
-    import base64
-
-    return {
-        "type": "image",
-        "source": {
-            "type": "base64",
-            "media_type": media_type(path),
-            "data": base64.standard_b64encode(path.read_bytes()).decode(),
-        },
-    }
 
 
 def readable_path(source, workdir: Path, converted: dict[str, str]) -> Path:
@@ -146,30 +98,6 @@ def document_blocks(
     return blocks
 
 
-# The same effort on both passes. Effort sits outside the tools -> system ->
-# messages prefix the cache is keyed on, so in principle it could differ — but
-# that has not been confirmed against the live API, and the cost of being wrong
-# is every topic call silently paying full price. Pinned until it is verified.
-EFFORT = "high"
-
-CACHE_BREAKPOINT = {"type": "ephemeral", "ttl": "1h"}
-
-
-def with_cache_breakpoint(documents: list[dict]) -> list[dict]:
-    """Mark the end of the shared prefix.
-
-    Exactly one breakpoint, on the last document. Caching is a prefix match, so
-    marking earlier blocks caches strictly less while spending one of the four
-    breakpoints a request is allowed. The one-hour life is what carries the
-    cache across a human-length pause at the plan checkpoint.
-    """
-    if not documents:
-        return documents
-    marked = [dict(block) for block in documents]
-    marked[-1]["cache_control"] = dict(CACHE_BREAKPOINT)
-    return marked
-
-
 def count_input_tokens(provider, request: dict) -> int:
     """Measure the exact request that is about to be sent.
 
@@ -182,15 +110,15 @@ def count_input_tokens(provider, request: dict) -> int:
 def cost_of(call: dict, prices=None) -> float:
     """Price one recorded call against the hardcoded table.
 
-    Uncached input at full rate, cache writes at the 1-hour multiplier, cache
-    reads at a tenth, output at the output rate.
+    Uncached input at full rate, cache writes and reads at their own rates,
+    output at the output rate.
     """
     if prices is None:
         # The rates the job was actually billed at. Falls back to the default
-        # provider's card when a caller has not supplied one.
-        from app.providers.anthropic_provider import MODELS
+        # model's card when a caller has not supplied one.
+        from app.providers.openai_provider import DEFAULT_MODEL, MODELS
 
-        prices = MODELS["claude-sonnet-5"]
+        prices = MODELS[DEFAULT_MODEL]
     per = 1_000_000
     return round(
         call["input_tokens"] * prices.input / per
@@ -224,13 +152,13 @@ def estimate_cost(
     did — and the reason the write is counted per pass rather than once: two
     schemas cannot share one cache entry.
 
-    Priced from the provider that will actually run the job. The old hardcoded
-    rates outlived two model switches and quoted Opus money for Sonnet work.
+    Priced from the model that will actually run the job, never from a
+    separate hardcoded table that can drift from it.
     """
     if prices is None:
-        from app.providers.anthropic_provider import MODELS
+        from app.providers.openai_provider import DEFAULT_MODEL, MODELS
 
-        prices = MODELS["claude-sonnet-5"]
+        prices = MODELS[DEFAULT_MODEL]
     per = 1_000_000
     per_pass_write = input_tokens * prices.cache_write / per
     per_pass_reads = topics * input_tokens * prices.cache_read / per

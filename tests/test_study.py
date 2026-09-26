@@ -31,12 +31,12 @@ from tests.test_planning import PLAN, upload
 NOW = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)
 
 
-def studied_deck(client, claude):
+def studied_deck(client, llm):
     """A deck with generated cards, enrolled for study."""
-    claude.replies_json(PLAN)
+    llm.replies_json(PLAN)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.answers(lesson=LESSON, cards=CELL_CARDS)
+    llm.answers(lesson=LESSON, cards=CELL_CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
 
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
@@ -70,8 +70,8 @@ def answer(client, card_uuid, rating, *, at=NOW, client_uuid="r1", ms=3000):
 # --- becoming something to study -----------------------------------------
 
 
-def test_enrolling_a_deck_makes_its_cards_studiable(client, claude):
-    deck_id, _ = studied_deck(client, claude)
+def test_enrolling_a_deck_makes_its_cards_studiable(client, llm):
+    deck_id, _ = studied_deck(client, llm)
 
     waiting = due(client, deck_id)
 
@@ -84,11 +84,11 @@ def test_enrolling_a_deck_makes_its_cards_studiable(client, claude):
     assert all(card["reps"] == 0 for card in waiting)
 
 
-def test_enrolling_twice_does_not_reset_what_you_have_already_learned(client, claude):
+def test_enrolling_twice_does_not_reset_what_you_have_already_learned(client, llm):
     """A second job against the same deck enrols the new cards and must leave
     the scheduling of the old ones alone. Losing it is the single most
     destructive thing this application could do to somebody."""
-    deck_id, _ = studied_deck(client, claude)
+    deck_id, _ = studied_deck(client, llm)
     card = due(client, deck_id)[0]
     answer(client, card["card_uuid"], "good")
 
@@ -103,8 +103,8 @@ def test_enrolling_twice_does_not_reset_what_you_have_already_learned(client, cl
 # --- answering -----------------------------------------------------------
 
 
-def test_answering_well_pushes_the_card_into_the_future(client, claude):
-    deck_id, _ = studied_deck(client, claude)
+def test_answering_well_pushes_the_card_into_the_future(client, llm):
+    deck_id, _ = studied_deck(client, llm)
     card = due(client, deck_id)[0]
 
     answer(client, card["card_uuid"], "easy")
@@ -114,8 +114,8 @@ def test_answering_well_pushes_the_card_into_the_future(client, claude):
     assert card["card_uuid"] in {c["card_uuid"] for c in much_later}
 
 
-def test_answering_again_keeps_the_card_close(client, claude):
-    deck_id, _ = studied_deck(client, claude)
+def test_answering_again_keeps_the_card_close(client, llm):
+    deck_id, _ = studied_deck(client, llm)
     card = due(client, deck_id)[0]
 
     answer(client, card["card_uuid"], "again")
@@ -124,8 +124,8 @@ def test_answering_again_keeps_the_card_close(client, claude):
     assert card["card_uuid"] in {c["card_uuid"] for c in soon}
 
 
-def test_a_rating_the_scheduler_does_not_know_is_refused(client, claude):
-    deck_id, _ = studied_deck(client, claude)
+def test_a_rating_the_scheduler_does_not_know_is_refused(client, llm):
+    deck_id, _ = studied_deck(client, llm)
     card = due(client, deck_id)[0]
 
     refused = answer(client, card["card_uuid"], "brilliant")
@@ -136,7 +136,7 @@ def test_a_rating_the_scheduler_does_not_know_is_refused(client, claude):
 # --- the properties the whole design rests on ----------------------------
 
 
-def test_the_same_review_pushed_twice_is_counted_once(client, claude):
+def test_the_same_review_pushed_twice_is_counted_once(client, llm):
     """The property that makes offline sync trivial.
 
     A device that pushed, lost the connection before the reply, and pushed
@@ -144,7 +144,7 @@ def test_the_same_review_pushed_twice_is_counted_once(client, claude):
     chose, because the client is the only thing that knows the two pushes were
     the same event.
     """
-    deck_id, _ = studied_deck(client, claude)
+    deck_id, _ = studied_deck(client, llm)
     card = due(client, deck_id)[0]
 
     first = answer(client, card["card_uuid"], "good", client_uuid="same-id")
@@ -156,7 +156,7 @@ def test_the_same_review_pushed_twice_is_counted_once(client, claude):
     assert len(history) == 1
 
 
-def test_scheduling_can_be_thrown_away_and_rebuilt_from_the_log(client, claude, pg_dsn):
+def test_scheduling_can_be_thrown_away_and_rebuilt_from_the_log(client, llm, pg_dsn):
     """`study_card` is a projection, not a record.
 
     If this ever fails, the log has stopped being authoritative — and with it
@@ -165,7 +165,7 @@ def test_scheduling_can_be_thrown_away_and_rebuilt_from_the_log(client, claude, 
     """
     from app import db, study
 
-    deck_id, _ = studied_deck(client, claude)
+    deck_id, _ = studied_deck(client, llm)
     card = due(client, deck_id)[0]["card_uuid"]
     for index, (rating, day) in enumerate([("good", 0), ("again", 1), ("good", 2), ("easy", 5)]):
         answer(
@@ -185,11 +185,11 @@ def test_scheduling_can_be_thrown_away_and_rebuilt_from_the_log(client, claude, 
 
 
 def test_reviews_that_arrive_out_of_order_are_replayed_in_the_order_they_happened(
-    client, claude
+    client, llm
 ):
     """Two devices sync in whatever order they reconnect. What happened is
     fixed; when we heard about it is not."""
-    deck_id, _ = studied_deck(client, claude)
+    deck_id, _ = studied_deck(client, llm)
     card = due(client, deck_id)[0]["card_uuid"]
 
     # Yesterday's answer arrives after today's.
@@ -206,7 +206,7 @@ def test_reviews_that_arrive_out_of_order_are_replayed_in_the_order_they_happene
 # --- mastery and activity ------------------------------------------------
 
 
-def test_mastery_of_a_topic_is_the_mean_chance_of_recalling_its_cards(client, claude):
+def test_mastery_of_a_topic_is_the_mean_chance_of_recalling_its_cards(client, llm):
     """Defined, rather than asserted.
 
     Retrievability is what FSRS already computes: the probability this card
@@ -214,7 +214,7 @@ def test_mastery_of_a_topic_is_the_mean_chance_of_recalling_its_cards(client, cl
     studying, which is the honest answer, and it compares between decks
     without normalising for how many cards each of them holds.
     """
-    deck_id, _ = studied_deck(client, claude)
+    deck_id, _ = studied_deck(client, llm)
     fresh = client.get(f"/api/decks/{deck_id}/mastery").json()
 
     assert fresh["topics"][0]["mastery"] == 0.0, "nothing recalled is nothing mastered"
@@ -237,10 +237,10 @@ def test_mastery_of_a_topic_is_the_mean_chance_of_recalling_its_cards(client, cl
     assert stale["topics"][0]["mastery"] < learned["topics"][0]["mastery"]
 
 
-def test_how_much_has_been_answered_is_counted_from_the_log(client, claude):
+def test_how_much_has_been_answered_is_counted_from_the_log(client, llm):
     """The number people actually enjoy competing on. A volume measure, and
     labelled as one — it says how much work was done, not how much is known."""
-    deck_id, _ = studied_deck(client, claude)
+    deck_id, _ = studied_deck(client, llm)
     for index, card in enumerate(due(client, deck_id)):
         answer(client, card["card_uuid"], "good", client_uuid=f"c{index}")
 
@@ -254,11 +254,11 @@ def test_how_much_has_been_answered_is_counted_from_the_log(client, claude):
 # --- one person's history is not another's -------------------------------
 
 
-def test_studying_is_per_person_even_on_the_same_card(boot, claude):
+def test_studying_is_per_person_even_on_the_same_card(boot, llm):
     from tests.conftest import SOMEBODY_ELSE, TESTER
 
     with boot() as machine:
-        deck_id, _ = studied_deck(machine, claude)
+        deck_id, _ = studied_deck(machine, llm)
         card = due(machine, deck_id)[0]["card_uuid"]
         answer(machine, card, "easy", client_uuid="mine")
 
@@ -272,7 +272,7 @@ def test_studying_is_per_person_even_on_the_same_card(boot, claude):
         assert machine.get("/api/me/activity").json()["reviews"] == 1
 
 
-def test_a_review_of_a_card_you_do_not_own_is_skipped_not_recorded(boot, claude):
+def test_a_review_of_a_card_you_do_not_own_is_skipped_not_recorded(boot, llm):
     """Skipped and named, rather than failing the batch: a 404 for one dead
     row used to jam a client's whole queue behind it forever. The security
     property is unchanged — nothing is recorded for a card that is not
@@ -280,7 +280,7 @@ def test_a_review_of_a_card_you_do_not_own_is_skipped_not_recorded(boot, claude)
     from tests.conftest import SOMEBODY_ELSE
 
     with boot() as machine:
-        deck_id, _ = studied_deck(machine, claude)
+        deck_id, _ = studied_deck(machine, llm)
         card = due(machine, deck_id)[0]["card_uuid"]
 
         machine.sign_in_as(SOMEBODY_ELSE)
@@ -291,13 +291,13 @@ def test_a_review_of_a_card_you_do_not_own_is_skipped_not_recorded(boot, claude)
         assert reply.json()["skipped"] == ["theirs"]
 
 
-def test_a_cloze_card_is_asked_rather_than_shown(client, claude):
+def test_a_cloze_card_is_asked_rather_than_shown(client, llm):
     """Showing the markup does not merely make it hard to judge — the answer is
     written in it."""
-    claude.replies_json(PLAN)
+    llm.replies_json(PLAN)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.answers(
+    llm.answers(
         lesson=LESSON,
         cards={
             "cards": [
@@ -325,10 +325,10 @@ def test_a_cloze_card_is_asked_rather_than_shown(client, claude):
 # --- what the redesigned Today screen reads --------------------------------
 
 
-def test_activity_carries_the_per_day_history_the_heatmap_is_built_from(client, claude):
+def test_activity_carries_the_per_day_history_the_heatmap_is_built_from(client, llm):
     """The heatmap, the streak ring and banked rest days are all derived from
     which days somebody studied. Totals alone cannot answer that."""
-    deck_id, _ = studied_deck(client, claude)
+    deck_id, _ = studied_deck(client, llm)
     card = due(client, deck_id)[0]["card_uuid"]
     for index, days_ago in enumerate([2, 2, 0]):
         answer(
@@ -347,14 +347,14 @@ def test_activity_carries_the_per_day_history_the_heatmap_is_built_from(client, 
     assert (NOW - timedelta(days=1)).date().isoformat() not in by_day
 
 
-def test_every_due_card_says_what_each_rating_would_schedule(client, claude):
+def test_every_due_card_says_what_each_rating_would_schedule(client, llm):
     """The interval previews under the rating buttons.
 
     Served from the same scheduler that will actually apply the rating, not
     mirrored client-side — a mirror that drifted from the real parameters
     would print numbers the next day proves wrong.
     """
-    deck_id, _ = studied_deck(client, claude)
+    deck_id, _ = studied_deck(client, llm)
 
     card = due(client, deck_id)[0]
 
@@ -375,9 +375,9 @@ def test_every_due_card_says_what_each_rating_would_schedule(client, claude):
     assert minutes(previews["good"]) <= minutes(previews["easy"])
 
 
-def test_previews_reflect_the_cards_actual_history(client, claude):
+def test_previews_reflect_the_cards_actual_history(client, llm):
     """A mature card's Good is measured in days; a fresh card's in minutes."""
-    deck_id, _ = studied_deck(client, claude)
+    deck_id, _ = studied_deck(client, llm)
     card = due(client, deck_id)[0]["card_uuid"]
     for index, day in enumerate([0, 2, 6]):
         answer(client, card, "easy", at=NOW + timedelta(days=day), client_uuid=f"m{index}")
@@ -390,7 +390,7 @@ def test_previews_reflect_the_cards_actual_history(client, claude):
     assert matured["previews"]["good"].endswith(("d", "mo")), matured["previews"]
 
 
-def test_reviews_record_whatever_the_database_calls_utc(client, claude, pg_dsn):
+def test_reviews_record_whatever_the_database_calls_utc(client, llm, pg_dsn):
     """The scheduler insists on `timezone.utc` exactly; psycopg hands back
     whatever the session's timezone is spelled as. On a server whose default
     is 'Etc/UTC' — the Docker image's default — every read-back datetime
@@ -406,7 +406,7 @@ def test_reviews_record_whatever_the_database_calls_utc(client, claude, pg_dsn):
     admin.execute(f'ALTER DATABASE "{dbname}" SET timezone TO \'Etc/UTC\'')
     admin.close()
     try:
-        deck_id, _ = studied_deck(client, claude)
+        deck_id, _ = studied_deck(client, llm)
         first = due(client, deck_id)[0]
         replied = answer(client, first["card_uuid"], "easy")
         assert replied.status_code == 200, replied.text
@@ -421,15 +421,15 @@ def test_reviews_record_whatever_the_database_calls_utc(client, claude, pg_dsn):
         admin.close()
 
 
-def test_a_finished_deck_is_already_studiable_for_its_owner(client, claude):
+def test_a_finished_deck_is_already_studiable_for_its_owner(client, llm):
     """The screen after generation shows topics and cards, not an enrolment
     gate. Observed live 2026-08-26: a 132-card deck read as "no cards yet"
     because the deck screen reads the study projection and nothing had
     enrolled the owner."""
-    claude.replies_json(PLAN)
+    llm.replies_json(PLAN)
     job_id = upload(client)
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.answers(lesson=LESSON, cards=CELL_CARDS)
+    llm.answers(lesson=LESSON, cards=CELL_CARDS)
     client.post(f"/api/jobs/{job_id}/generate")
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
 

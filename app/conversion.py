@@ -24,7 +24,7 @@ CONVERTIBLE = {".docx", ".doc", ".pptx", ".ppt", ".odt", ".odp", ".rtf"}
 SPREADSHEET = {".xlsx", ".xlsm", ".xls", ".csv"}
 IMAGE = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
-# Sized to processors, and deliberately unrelated to the Claude fan-out limit.
+# Sized to processors, and deliberately unrelated to the model-call fan-out limit.
 # On a single vCPU, concurrent conversion buys nothing and multiplies memory:
 # measured 2922ms for one, 12280ms for four. At ~218MB peak each, that is also
 # how a 1GB machine runs out of memory.

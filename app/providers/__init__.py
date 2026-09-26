@@ -1,6 +1,7 @@
-"""Model vendors, behind one narrow interface.
+"""The model vendor, behind one narrow interface.
 
-`build(...)` is the only place that knows which vendors exist.
+OpenAI is the only vendor. The interface stays because it is what keeps
+request shapes, caching, refusals and prices out of the rest of the code.
 """
 
 from __future__ import annotations
@@ -17,48 +18,23 @@ from app.providers.base import (
     Usage,
     check_usable,
 )
+from app.providers.openai_provider import DEFAULT_MODEL, OpenAIProvider
 
 __all__ = [
     "Capabilities", "Prices", "Provider", "RateLimited", "Reply", "Unusable",
-    "Usage", "check_usable", "build", "PROVIDERS",
+    "Usage", "check_usable", "build", "OpenAIProvider",
 ]
 
-PROVIDERS = ("anthropic", "gemini", "openai")
 
+def build(model: str | None = None, client=None) -> Provider:
+    """Construct the OpenAI provider.
 
-def build(name: str | None = None, model: str | None = None, client=None) -> Provider:
-    """Construct the configured provider.
-
-    Reads the environment so that swapping vendors is a redeploy, not a code
-    change — and refuses an unknown name rather than silently falling back to a
-    default the operator did not ask for.
+    `AI_ANKI_MODEL` picks among the priced OpenAI models; an unpriced one is
+    refused rather than billed at a guess.
     """
-    name = (name or os.environ.get("AI_ANKI_PROVIDER") or "anthropic").lower()
-    model = model or os.environ.get("AI_ANKI_MODEL") or None
+    model = model or os.environ.get("AI_ANKI_MODEL") or DEFAULT_MODEL
+    if client is None:  # pragma: no cover - exercised only with the real SDK
+        import openai
 
-    if name == "anthropic":
-        import anthropic
-
-        from app.providers.anthropic_provider import AnthropicProvider
-
-        return AnthropicProvider(client or anthropic.Anthropic(), model=model or "claude-sonnet-5")
-
-    if name == "gemini":
-        from app.providers.gemini_provider import GeminiProvider
-
-        if client is None:  # pragma: no cover - exercised only with the real SDK
-            from google import genai
-
-            client = genai.Client()
-        return GeminiProvider(client, model=model or "gemini-3.7-flash")
-
-    if name == "openai":
-        from app.providers.openai_provider import OpenAIProvider
-
-        if client is None:  # pragma: no cover - exercised only with the real SDK
-            import openai
-
-            client = openai.OpenAI()
-        return OpenAIProvider(client, model=model or "gpt-5.6-luna")
-
-    raise ValueError(f"unknown provider {name!r}; expected one of {', '.join(PROVIDERS)}")
+        client = openai.OpenAI()
+    return OpenAIProvider(client, model=model)

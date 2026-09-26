@@ -203,7 +203,7 @@ def test_two_subjects_are_two_people_however_alike_they_look(client, pg_dsn):
     assert count == 2
 
 
-def test_only_the_author_edits_deletes_or_rerolls_a_card(boot, claude):
+def test_only_the_author_edits_deletes_or_rerolls_a_card(boot, llm):
     """A card uuid travels — due lists carry them, and so do logs and links.
     Holding one must grant nothing: these three endpoints used to take any
     authenticated account, which let a stranger rewrite an owner's card, or
@@ -212,7 +212,7 @@ def test_only_the_author_edits_deletes_or_rerolls_a_card(boot, claude):
     from tests.test_study import studied_deck
 
     with boot() as machine:
-        deck_id, _ = studied_deck(machine, claude)
+        deck_id, _ = studied_deck(machine, llm)
         card = machine.get(f"/api/decks/{deck_id}/cards").json()["cards"][0]
 
         machine.sign_in_as(SOMEBODY_ELSE)

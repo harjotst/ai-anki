@@ -8,8 +8,6 @@ so a self-referencing topic node would be a 400.
 from __future__ import annotations
 
 
-MODEL = "claude-sonnet-5"
-
 DIFFICULTIES = ["easy", "medium", "hard"]
 NOTE_TYPES = ["basic", "cloze"]
 
@@ -147,14 +145,6 @@ def guidance_block(guidance: str | None) -> str:
     )
 
 
-def text_document(text: str, filename: str) -> dict:
-    return {
-        "type": "document",
-        "source": {"type": "text", "media_type": "text/plain", "data": text},
-        "title": filename,
-    }
-
-
 def existing_topics_block(existing: list[dict]) -> str:
     """Tell pass 1 what the deck it is being added to already covers.
 
@@ -191,11 +181,10 @@ def build_plan_request(
 ) -> dict:
     """Assemble the pass-1 request.
 
-    Deliberately NOT cached. Measured against the live API: a request carrying
-    a different JSON schema gets its own cache lineage, and this is the only
-    call in a job that sends DECK_PLAN_SCHEMA. An entry nothing ever reads still
-    costs a write premium — 2x base input at a one-hour lifetime — so caching
-    here is a pure loss.
+    Deliberately NOT cached. A request carrying a different JSON schema gets
+    its own cache lineage, and this is the only call in a job that sends
+    DECK_PLAN_SCHEMA. An entry nothing ever reads still costs a write premium,
+    so caching here is a pure loss.
     """
     return provider.build_request(
         system=SYSTEM,

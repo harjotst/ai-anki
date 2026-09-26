@@ -9,18 +9,18 @@ from tests.anki_harness import anki_collection
 from tests.test_slot_matching import PLAN, card, run
 
 
-def deck_with_one_exported_card(client, claude):
-    job_id = run(client, claude, [card("What makes ATP?", "Mitochondria.")])
+def deck_with_one_exported_card(client, llm):
+    job_id = run(client, llm, [card("What makes ATP?", "Mitochondria.")])
     deck_id = client.get(f"/api/jobs/{job_id}").json()["deck_id"]
     package = client.get(f"/api/jobs/{job_id}/deck.apkg").content
     uuid = client.get(f"/api/decks/{deck_id}/ledger").json()["cards"][0]["card_uuid"]
     return deck_id, uuid, package
 
 
-def revised_job(client, claude, deck_id, uuid):
+def revised_job(client, llm, deck_id, uuid):
     return run(
         client,
-        claude,
+        llm,
         [
             card("What makes most of the cell's ATP?", "The mitochondrion.", existing=uuid),
             card("What is the nucleolus for?", "Ribosomes."),
@@ -29,18 +29,18 @@ def revised_job(client, claude, deck_id, uuid):
     )
 
 
-def test_the_diff_counts_what_will_be_updated_added_and_left_alone(client, claude):
-    deck_id, uuid, _ = deck_with_one_exported_card(client, claude)
-    job_id = revised_job(client, claude, deck_id, uuid)
+def test_the_diff_counts_what_will_be_updated_added_and_left_alone(client, llm):
+    deck_id, uuid, _ = deck_with_one_exported_card(client, llm)
+    job_id = revised_job(client, llm, deck_id, uuid)
 
     diff = client.get(f"/api/jobs/{job_id}/diff").json()
 
     assert diff["counts"] == {"update": 1, "add": 1, "unchanged": 0}
 
 
-def test_each_pending_update_shows_what_it_replaces(client, claude):
-    deck_id, uuid, _ = deck_with_one_exported_card(client, claude)
-    job_id = revised_job(client, claude, deck_id, uuid)
+def test_each_pending_update_shows_what_it_replaces(client, llm):
+    deck_id, uuid, _ = deck_with_one_exported_card(client, llm)
+    job_id = revised_job(client, llm, deck_id, uuid)
 
     update = client.get(f"/api/jobs/{job_id}/diff").json()["updates"][0]
 
@@ -49,10 +49,10 @@ def test_each_pending_update_shows_what_it_replaces(client, claude):
     assert update["proposed_front"] == "What makes most of the cell's ATP?"
 
 
-def test_downloading_adds_only_unless_updating_is_asked_for(client, claude):
+def test_downloading_adds_only_unless_updating_is_asked_for(client, llm):
     """The safe path is the one you get by doing nothing."""
-    deck_id, uuid, first_package = deck_with_one_exported_card(client, claude)
-    job_id = revised_job(client, claude, deck_id, uuid)
+    deck_id, uuid, first_package = deck_with_one_exported_card(client, llm)
+    job_id = revised_job(client, llm, deck_id, uuid)
 
     default = client.get(f"/api/jobs/{job_id}/deck.apkg")
 
@@ -69,9 +69,9 @@ def test_downloading_adds_only_unless_updating_is_asked_for(client, claude):
         assert col.note(uuid).fields[0] == "What makes ATP?", "untouched, not reverted"
 
 
-def test_asking_for_updates_includes_them(client, claude):
-    deck_id, uuid, _ = deck_with_one_exported_card(client, claude)
-    job_id = revised_job(client, claude, deck_id, uuid)
+def test_asking_for_updates_includes_them(client, llm):
+    deck_id, uuid, _ = deck_with_one_exported_card(client, llm)
+    job_id = revised_job(client, llm, deck_id, uuid)
 
     updated = client.get(f"/api/jobs/{job_id}/deck.apkg?update=true")
 
@@ -79,9 +79,9 @@ def test_asking_for_updates_includes_them(client, claude):
     assert updated.headers["x-notes-added"] == "1"
 
 
-def test_a_skipped_update_is_left_out_of_the_package_entirely(client, claude):
-    deck_id, uuid, first_package = deck_with_one_exported_card(client, claude)
-    job_id = revised_job(client, claude, deck_id, uuid)
+def test_a_skipped_update_is_left_out_of_the_package_entirely(client, llm):
+    deck_id, uuid, first_package = deck_with_one_exported_card(client, llm)
+    job_id = revised_job(client, llm, deck_id, uuid)
 
     package = client.get(f"/api/jobs/{job_id}/deck.apkg?update=true&skip={uuid}")
 
@@ -99,9 +99,9 @@ def test_a_skipped_update_is_left_out_of_the_package_entirely(client, claude):
         assert col.scheduling(uuid) == [(90, 40)]
 
 
-def test_the_diff_warns_that_updating_replaces_hand_added_tags(client, claude):
-    deck_id, uuid, _ = deck_with_one_exported_card(client, claude)
-    job_id = revised_job(client, claude, deck_id, uuid)
+def test_the_diff_warns_that_updating_replaces_hand_added_tags(client, llm):
+    deck_id, uuid, _ = deck_with_one_exported_card(client, llm)
+    job_id = revised_job(client, llm, deck_id, uuid)
 
     diff = client.get(f"/api/jobs/{job_id}/diff").json()
 

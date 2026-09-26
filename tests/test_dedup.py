@@ -38,25 +38,25 @@ def card(front, back="."):
             "existing_card_id": None}
 
 
-def run(client, claude, first, second):
-    claude.counts_tokens(1000).replies_json(PLAN)
+def run(client, llm, first, second):
+    llm.counts_tokens(1000).replies_json(PLAN)
     job_id = client.post(
         "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json({"cards": first}).replies_json({"cards": second})
+    llm.replies_json({"cards": first}).replies_json({"cards": second})
     client.post(f"/api/jobs/{job_id}/generate")
     return job_id
 
 
-def test_the_plan_gives_each_topic_claims_it_alone_owns(client, claude):
-    claude.counts_tokens(1000).replies_json(PLAN)
+def test_the_plan_gives_each_topic_claims_it_alone_owns(client, llm):
+    llm.counts_tokens(1000).replies_json(PLAN)
     job_id = client.post(
         "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
 
-    schema = claude.requests[0]["output_config"]["format"]["schema"]
+    schema = llm.requests[0]["text"]["format"]["schema"]
     topic = schema["properties"]["topics"]["items"]
     assert "claims" in topic["properties"]
     # Partitioning the material is what prevents the overlap; catching
@@ -64,18 +64,18 @@ def test_the_plan_gives_each_topic_claims_it_alone_owns(client, claude):
     assert "claims" in topic["required"]
 
 
-def test_each_topic_call_is_told_what_the_other_topics_own(client, claude):
-    run(client, claude, [card("Q1?")], [card("Q2?")])
+def test_each_topic_call_is_told_what_the_other_topics_own(client, llm):
+    run(client, llm, [card("Q1?")], [card("Q2?")])
 
-    channels_instruction = claude.requests[-1]["messages"][0]["content"][-1]["text"]
+    channels_instruction = llm.requests[-1]["input"][0]["content"][-1]["text"]
     assert "Neuro::Resting Potential" in channels_instruction
     assert "Voltage-gated sodium channels open at threshold." in channels_instruction
 
 
-def test_an_exact_duplicate_across_topics_is_flagged_not_silently_dropped(client, claude):
+def test_an_exact_duplicate_across_topics_is_flagged_not_silently_dropped(client, llm):
     job_id = run(
         client,
-        claude,
+        llm,
         [card("What is the resting membrane potential?", "About -70 mV.")],
         [card("What is the resting membrane potential?", "About -70 mV.")],
     )
@@ -89,10 +89,10 @@ def test_an_exact_duplicate_across_topics_is_flagged_not_silently_dropped(client
     assert len(cards) == 2
 
 
-def test_the_kept_copy_is_the_one_in_the_more_specific_topic(client, claude):
+def test_the_kept_copy_is_the_one_in_the_more_specific_topic(client, llm):
     job_id = run(
         client,
-        claude,
+        llm,
         [card("What is the resting membrane potential?", "-70 mV.")],
         [card("What is the resting membrane potential?", "-70 mV.")],
     )
@@ -109,10 +109,10 @@ def test_normalisation_sees_through_formatting_but_not_through_meaning():
     )
 
 
-def test_a_deck_with_no_overlap_flags_nothing(client, claude):
+def test_a_deck_with_no_overlap_flags_nothing(client, llm):
     job_id = run(
         client,
-        claude,
+        llm,
         [card("What is the resting membrane potential?")],
         [card("When do voltage-gated sodium channels open?")],
     )
@@ -121,8 +121,8 @@ def test_a_deck_with_no_overlap_flags_nothing(client, claude):
     assert all(c["duplicate_of"] is None for c in cards)
 
 
-def test_the_download_page_says_to_check_for_overlap_with_cards_already_owned(client, claude):
-    job_id = run(client, claude, [card("Q1?")], [card("Q2?")])
+def test_the_download_page_says_to_check_for_overlap_with_cards_already_owned(client, llm):
+    job_id = run(client, llm, [card("Q1?")], [card("Q2?")])
 
     guidance = client.get(f"/api/jobs/{job_id}/download-info").json()
 

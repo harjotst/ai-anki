@@ -9,9 +9,9 @@ from tests.conftest import account_id
 from tests.test_study import answer, due, studied_deck
 
 
-def test_the_owner_can_delete_a_deck_and_it_is_gone_everywhere(boot, claude):
+def test_the_owner_can_delete_a_deck_and_it_is_gone_everywhere(boot, llm):
     with boot() as machine:
-        deck_id, job_id = studied_deck(machine, claude)
+        deck_id, job_id = studied_deck(machine, llm)
 
         reply = machine.delete(f"/api/decks/{deck_id}")
         assert reply.status_code == 200
@@ -22,21 +22,21 @@ def test_the_owner_can_delete_a_deck_and_it_is_gone_everywhere(boot, claude):
         assert machine.get(f"/api/decks/{deck_id}/due").status_code == 404
 
 
-def test_a_stranger_cannot_even_learn_the_deck_existed(boot, claude):
+def test_a_stranger_cannot_even_learn_the_deck_existed(boot, llm):
     with boot() as machine:
-        deck_id, _ = studied_deck(machine, claude)
+        deck_id, _ = studied_deck(machine, llm)
 
         machine.sign_in_as(account_id(77))
         assert machine.delete(f"/api/decks/{deck_id}").status_code == 404
 
 
-def test_the_review_log_survives_the_deck(boot, claude, pg_dsn):
+def test_the_review_log_survives_the_deck(boot, llm, pg_dsn):
     """Reviews record work somebody actually did. Deleting a deck must not
     rewrite that history."""
     import psycopg
 
     with boot() as machine:
-        deck_id, _ = studied_deck(machine, claude)
+        deck_id, _ = studied_deck(machine, llm)
         card = due(machine, deck_id)[0]["card_uuid"]
         assert answer(machine, card, "good").status_code == 200
 

@@ -125,7 +125,11 @@ def build_cards_request(
     existing: list[dict] | None = None,
     siblings: list[dict] | None = None,
     detail_level: int | None = None,
+    also: str = "",
 ) -> dict:
+    """The pass-2 request for one topic. `also` is appended to the instruction,
+    after everything that shapes the topic — a re-roll's "write one
+    replacement for this card" goes there."""
     difficulty = str(topic.get("difficulty", "medium")).lower()
     instruction = (
         f"Generate cards for one topic only: {topic['path']}\n\n"
@@ -149,15 +153,14 @@ def build_cards_request(
         + detail_block(detail_level)
         + siblings_block(siblings or [])
         + existing_cards_block(existing or [])
+        + also
     )
-    # Five minutes, not an hour. Every topic call sends this same schema, so
-    # they DO share a prefix — the first writes it and the rest read it. They
-    # run back-to-back in the worker with no human pause between them, and an
-    # hour costs 2x base input against 1.25x for five minutes.
+    # Cached: every topic call sends this same schema, so they DO share a
+    # prefix — the first writes it and the rest read it, back to back in the
+    # worker with no human pause between them.
     #
-    # They do NOT share with the planning pass. Measured against the live API on
-    # 2026-08-17: a request carrying a different JSON schema gets its own cache
-    # lineage, because structured outputs render ahead of the messages.
+    # They do NOT share with the planning pass: a request carrying a different
+    # JSON schema gets its own cache lineage.
     return provider.build_request(
         system=SYSTEM,
         documents=documents,

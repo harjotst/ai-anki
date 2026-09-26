@@ -6,17 +6,15 @@ never by name — and genanki can emit it with a small Model subclass. The clien
 supplies the masking JavaScript; we supply the shapes.
 
 Coordinates are the expensive part, and they are why this needs its own
-ingestion path. Anthropic's documentation is explicit that for PDF document
-blocks the pages are rasterized server-side at dimensions the caller does not
-control, so coordinates returned against them cannot be mapped back onto the
-page. A diagram therefore has to be rasterized *here*, sent as an image block,
-and the returned pixel coordinates normalised against the dimensions we chose.
+ingestion path. A PDF sent as a document is rasterized server-side at
+dimensions the caller does not control, so coordinates returned against it
+cannot be mapped back onto the page. A diagram therefore has to be rasterized
+*here*, sent as an image, and the returned pixel coordinates normalised against
+the dimensions we chose.
 """
 
 from __future__ import annotations
 
-import base64
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,11 +24,9 @@ import genanki
 # wrong and the note imports as an ordinary cloze with visible shape text.
 IMAGE_OCCLUSION_STOCK_KIND = 6
 
-# The high-resolution tier: 2576px on the long edge, capped at 4784 visual
-# tokens. Claude resizes server-side to fit these, so we resize to them first —
-# otherwise the coordinates come back against dimensions we never saw.
+# Pages are resized to fit this long edge before they are sent, so the image
+# the model measures is one whose dimensions we chose and know.
 MAX_EDGE_PX = 2576
-PATCH = 28  # Images are billed in 28x28 patches.
 
 
 @dataclass(frozen=True)
@@ -45,7 +41,7 @@ class Shape:
 
 
 def resized_dimensions(width: int, height: int) -> tuple[int, int]:
-    """The size Claude will actually see, computed the way it computes it.
+    """The size of the image that is actually sent.
 
     Normalising against the original dimensions instead of these is the classic
     way to get masks that are subtly and consistently offset.
@@ -55,11 +51,6 @@ def resized_dimensions(width: int, height: int) -> tuple[int, int]:
         return width, height
     scale = MAX_EDGE_PX / longest
     return max(1, int(width * scale)), max(1, int(height * scale))
-
-
-def visual_tokens(width: int, height: int) -> int:
-    resized_width, resized_height = resized_dimensions(width, height)
-    return math.ceil(resized_width / PATCH) * math.ceil(resized_height / PATCH)
 
 
 def rasterize_pdf_page(pdf: Path, page_number: int, destination: Path, scale: float = 2.0) -> Path:
@@ -84,17 +75,6 @@ def rasterize_pdf_page(pdf: Path, page_number: int, destination: Path, scale: fl
     return destination
 
 
-def image_block(path: Path) -> dict:
-    return {
-        "type": "image",
-        "source": {
-            "type": "base64",
-            "media_type": "image/png",
-            "data": base64.standard_b64encode(path.read_bytes()).decode(),
-        },
-    }
-
-
 SHAPES_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -107,8 +87,8 @@ SHAPES_SCHEMA = {
                 "additionalProperties": False,
                 "required": ["left", "top", "width", "height", "label"],
                 "properties": {
-                    # Absolute pixels, because Anthropic's guidance is explicit
-                    # that asking for pre-normalised coordinates works badly.
+                    # Absolute pixels: models locate things in the pixels they
+                    # were shown far better than in pre-normalised fractions.
                     # We normalise afterwards, where we know the dimensions.
                     "left": {"type": "integer", "description": "Left edge in pixels."},
                     "top": {"type": "integer", "description": "Top edge in pixels."},
@@ -131,21 +111,19 @@ INSTRUCTION = (
 )
 
 
-def build_shapes_request(image_path: Path) -> dict:
-    from app import ingestion, planning
+def build_shapes_request(image_path: Path, provider) -> dict:
+    from app import planning
 
-    return {
-        "model": planning.MODEL,
-        "max_tokens": 8000,
-        "system": planning.SYSTEM,
-        "output_config": {
-            "effort": ingestion.EFFORT,
-            "format": {"type": "json_schema", "schema": SHAPES_SCHEMA},
-        },
-        "messages": [
-            {"role": "user", "content": [image_block(image_path), {"type": "text", "text": INSTRUCTION}]}
+    return provider.build_request(
+        system=planning.SYSTEM,
+        documents=[
+            provider.document_block(path=image_path, filename=image_path.name, handle=None)
         ],
-    }
+        instruction=INSTRUCTION,
+        schema=SHAPES_SCHEMA,
+        max_tokens=8000,
+        cache=None,
+    )
 
 
 def normalise_shapes(shapes: list[dict], width: int, height: int) -> list[Shape]:

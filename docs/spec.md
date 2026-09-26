@@ -1,5 +1,10 @@
 # Spec — ai-anki
 
+> **Model vendor, since 2026-09-26:** the app runs on OpenAI only (`gpt-5.6-luna`);
+> the Anthropic and Gemini providers were removed. This document records the original
+> design and the evidence gathered for it, when Claude was the model; the vendor-specific
+> details below are history. `docs/providers.md` describes what runs now.
+
 Turn study documents into Anki decks whose structure and difficulty scale with the material.
 
 **Status:** ready-for-agent

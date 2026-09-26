@@ -35,7 +35,7 @@ def test_the_graceful_shutdown_window_sits_under_the_platform_kill_timeout():
 
 
 def test_no_secret_is_baked_into_the_image():
-    for forbidden in ("ANTHROPIC_API_KEY", "AI_ANKI_OWNER_TOKEN", "sk-ant"):
+    for forbidden in ("OPENAI_API_KEY", "AI_ANKI_OWNER_TOKEN", "sk-proj-"):
         assert forbidden not in DOCKERFILE, f"{forbidden} must be a runtime secret"
 
 
@@ -125,11 +125,12 @@ def test_nothing_outside_the_api_is_served(client, escape):
     assert "[project]" not in response.text
 
 
-def test_the_provider_choice_is_documented_with_its_gate_and_its_assumptions():
+def test_the_model_is_documented_with_its_gate_and_its_estimates():
     docs = (ROOT / "docs" / "providers.md").read_text()
 
-    assert "AI_ANKI_PROVIDER" in docs
+    assert "OPENAI_API_KEY" in docs
+    assert "AI_ANKI_MODEL" in docs
     # The gate is the whole point; a rate table without it invites picking the
     # cheapest row and paying more.
-    assert "20,000 tokens" in docs, "the Nova caching cap must be recorded"
-    assert "assumptions, not facts" in docs.lower()
+    assert "≥ 20 min" in docs
+    assert "estimates, not measurements" in docs.lower()

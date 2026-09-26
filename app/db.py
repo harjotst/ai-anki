@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS job (
     error             TEXT,
     plan_json         TEXT,
     -- Consecutive expensive runs that produced nothing. Incremented before the
-    -- first Anthropic call of a run and reset when the job actually advances,
+    -- first model call of a run and reset when the job actually advances,
     -- so a crash-loop is bounded even though the crash itself runs no code.
     attempt_count     INTEGER NOT NULL DEFAULT 0,
     last_attempt_at   TIMESTAMPTZ,
@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS job_event (
     created_at        TIMESTAMPTZ NOT NULL
 );
 
--- One row per Anthropic call. Cost is derived from these rather than estimated,
+-- One row per model call. Cost is derived from these rather than estimated,
 -- so "what did this job cost" is answered from what the API reported and not
 -- from what we hoped it would be.
 CREATE TABLE IF NOT EXISTS api_call (

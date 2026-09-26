@@ -335,7 +335,7 @@ def begin_attempt(
     """Claim a job for a run that is about to spend money.
 
     Everything that guards the spend happens here, in one committed
-    transaction, *before* the first Anthropic call: the transition, the
+    transaction, *before* the first model call: the transition, the
     crash-loop cap, the backoff, and the increment. A resume that counted itself
     afterwards would never count at all, because the failure mode this exists
     for kills the process mid-call.
@@ -641,11 +641,10 @@ def documents_for(conn: psycopg.Connection, job_id: str, provider) -> list[dict]
     most once per source, ever, and its id is committed before it is used.
     """
     sources = load_sources(conn, job_id)
-    # File handles are the VENDOR'S ids and mean nothing to any other vendor,
-    # so they are stored under the vendor's name and a handle from a different
-    # one is simply not a handle — the file re-uploads and the new id replaces
-    # it. Without this, switching providers sent Anthropic file ids to OpenAI
-    # and every call against them died.
+    # File handles are the vendor's ids, so they are stored under the vendor's
+    # name. A handle stored under any other name — left by an earlier vendor
+    # this app used — is simply not a handle: the file re-uploads and the new
+    # id replaces it, instead of every call dying on an id OpenAI never issued.
     tag = f"{provider.name}:"
     known = {
         s.filename: s.file_id[len(tag):]

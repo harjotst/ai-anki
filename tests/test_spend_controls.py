@@ -10,11 +10,13 @@ import pytest
 from tests.conftest import TESTER
 from tests.test_slot_matching import PLAN, card
 
-BIG_USAGE = {"input_tokens": 0, "cache_creation_input_tokens": 400_000, "output_tokens": 1_000}
+# 4,000,000 cache-write tokens at $0.25/MTok is $1.00, plus a little output:
+# just over the $1.00 budgets the tests below set.
+BIG_USAGE = {"input_tokens": 0, "cache_write_tokens": 4_000_000, "output_tokens": 1_000}
 
 
-def start(client, claude, tokens=1000, deck_id=None):
-    claude.counts_tokens(tokens)
+def start(client, llm, tokens=1000, deck_id=None):
+    llm.counts_tokens(tokens)
     return client.post(
         "/api/jobs",
         files={"file": ("lecture.txt", b"Material.", "text/plain")},
@@ -22,16 +24,16 @@ def start(client, claude, tokens=1000, deck_id=None):
     ).json()["job_id"]
 
 
-def plan_and_generate(client, claude, job_id, usage=None):
-    claude.replies_json(PLAN, usage=usage or {})
+def plan_and_generate(client, llm, job_id, usage=None):
+    llm.replies_json(PLAN, usage=usage or {})
     planned = client.post(f"/api/jobs/{job_id}/plan")
-    claude.replies_json({"cards": [card("Q?")]})
+    llm.replies_json({"cards": [card("Q?")]})
     client.post(f"/api/jobs/{job_id}/generate")
     return planned
 
 
-def test_a_job_over_the_token_ceiling_is_refused_by_name(client, claude):
-    job_id = start(client, claude, tokens=900_000)
+def test_a_job_over_the_token_ceiling_is_refused_by_name(client, llm):
+    job_id = start(client, llm, tokens=900_000)
 
     refused = client.post(f"/api/jobs/{job_id}/plan")
 
@@ -39,28 +41,28 @@ def test_a_job_over_the_token_ceiling_is_refused_by_name(client, claude):
     assert "700,000" in refused.json()["detail"], "the limit that was hit is named"
 
 
-def test_the_ceiling_is_rechecked_before_the_fan_out_not_only_at_admission(boot, claude):
+def test_the_ceiling_is_rechecked_before_the_fan_out_not_only_at_admission(boot, llm):
     """A plan can multiply the work, so admission alone is not enough."""
     with boot(per_job_token_ceiling=1_500) as machine:
-        job_id = start(machine, claude, tokens=1_000)
-        claude.replies_json(PLAN)
+        job_id = start(machine, llm, tokens=1_000)
+        llm.replies_json(PLAN)
         machine.post(f"/api/jobs/{job_id}/plan")
 
         # The document got bigger between passes — or the plan did.
-        claude.counts_tokens(900_000)
+        llm.counts_tokens(900_000)
         refused = machine.post(f"/api/jobs/{job_id}/generate")
 
         assert refused.status_code == 413
-        assert claude.requests[-1] == claude.requests[-1]  # no topic call was made
+        assert llm.requests[-1] == llm.requests[-1]  # no topic call was made
 
 
-def test_a_person_who_has_spent_their_daily_budget_is_blocked(boot, claude):
+def test_a_person_who_has_spent_their_daily_budget_is_blocked(boot, llm):
     with boot(daily_budget_usd=1.00) as machine:
-        first = start(machine, claude)
-        plan_and_generate(machine, claude, first, usage=BIG_USAGE)
+        first = start(machine, llm)
+        plan_and_generate(machine, llm, first, usage=BIG_USAGE)
 
-        second = start(machine, claude)
-        claude.replies_json(PLAN)
+        second = start(machine, llm)
+        llm.replies_json(PLAN)
         refused = machine.post(f"/api/jobs/{second}/plan")
 
         assert refused.status_code == 429
@@ -69,42 +71,42 @@ def test_a_person_who_has_spent_their_daily_budget_is_blocked(boot, claude):
         assert "budget" in detail
 
 
-def test_the_global_ceiling_stops_everybody_not_just_the_big_spender(boot, claude):
+def test_the_global_ceiling_stops_everybody_not_just_the_big_spender(boot, llm):
     with boot(daily_budget_usd=1000.0, global_daily_budget_usd=1.00) as machine:
-        first = start(machine, claude)
-        plan_and_generate(machine, claude, first, usage=BIG_USAGE)
+        first = start(machine, llm)
+        plan_and_generate(machine, llm, first, usage=BIG_USAGE)
 
-        second = start(machine, claude)
-        claude.replies_json(PLAN)
+        second = start(machine, llm)
+        llm.replies_json(PLAN)
         refused = machine.post(f"/api/jobs/{second}/plan")
 
         assert refused.status_code == 429
         assert "global" in refused.json()["detail"].lower()
 
 
-def test_the_kill_switch_stops_generation_without_a_redeploy(boot, claude, monkeypatch):
+def test_the_kill_switch_stops_generation_without_a_redeploy(boot, llm, monkeypatch):
     monkeypatch.setenv("AI_ANKI_GENERATION_DISABLED", "1")
     with boot() as machine:
-        job_id = start(machine, claude)
+        job_id = start(machine, llm)
 
         refused = machine.post(f"/api/jobs/{job_id}/plan")
 
         assert refused.status_code == 503
         assert "disabled" in refused.json()["detail"].lower()
-        assert claude.requests == [], "nothing may be generated while the switch is on"
+        assert llm.requests == [], "nothing may be generated while the switch is on"
 
 
-def test_an_administrator_can_see_what_each_person_has_spent(boot, claude):
+def test_an_administrator_can_see_what_each_person_has_spent(boot, llm):
     with boot() as machine:
-        job_id = start(machine, claude)
-        plan_and_generate(machine, claude, job_id, usage=BIG_USAGE)
+        job_id = start(machine, llm)
+        plan_and_generate(machine, llm, job_id, usage=BIG_USAGE)
 
         spend = machine.get("/api/spend").json()
 
         person = next(row for row in spend["people"] if row["account_id"] == TESTER)
-        # 400,000 cache-write tokens at 2x Sonnet's $2/MTok is $1.60, worked
-        # out independently of the code.
-        assert person["cost_usd"] >= 1.60
+        # 4,000,000 cache-write tokens at $0.25/MTok is $1.00, worked out
+        # independently of the code.
+        assert person["cost_usd"] >= 1.00
         assert person["person"], "a name to show, even if it is only the id"
 
 
