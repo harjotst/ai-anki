@@ -70,12 +70,11 @@ def create_deck(conn: psycopg.Connection, name: str, account_id: str | None) -> 
 
 
 def delete_deck(conn: psycopg.Connection, deck_id: str) -> None:
-    """Remove a deck and everything the application shows for it, for everyone.
+    """Remove a deck and everything the application shows for it.
 
-    The review log stays. It records work people actually did, every
-    leaderboard has already counted it, and the append-only promise is what
-    keeps those numbers recomputable — deleting a deck must not rewrite
-    anybody's history, including a recipient's.
+    The review log stays. It records work somebody actually did, and the
+    append-only promise is what keeps the numbers built on it recomputable —
+    deleting a deck must not rewrite anybody's history.
 
     The jobs go with the deck, and their api_call rows with them, which
     forgets what those runs cost. Accepted knowingly: budgets are daily
@@ -84,7 +83,6 @@ def delete_deck(conn: psycopg.Connection, deck_id: str) -> None:
     """
     with db.transaction(conn):
         conn.execute("DELETE FROM study_card WHERE deck_id = %s", (deck_id,))
-        conn.execute("DELETE FROM deck_member WHERE deck_id = %s", (deck_id,))
         conn.execute("DELETE FROM card WHERE deck_id = %s", (deck_id,))
         # Cascades take the rest of each run: sources, topics, lessons,
         # events, api calls, and any cards still keyed only by job.
@@ -92,55 +90,12 @@ def delete_deck(conn: psycopg.Connection, deck_id: str) -> None:
         conn.execute("DELETE FROM deck WHERE id = %s", (deck_id,))
 
 
-def owns_deck(conn: psycopg.Connection, deck_id: str, account_id: str | None) -> bool:
-    """Whoever uploaded the material. They alone may rename it, add to it, or
-    hand it to somebody else."""
+def deck_exists(conn: psycopg.Connection, deck_id: str, account_id: str | None) -> bool:
+    """Is this this person's deck? A deck belongs to whoever uploaded the material."""
     return conn.execute(
         "SELECT 1 FROM deck WHERE id = %s AND account_id IS NOT DISTINCT FROM %s",
         (deck_id, account_id),
     ).fetchone() is not None
-
-
-def deck_exists(conn: psycopg.Connection, deck_id: str, account_id: str | None) -> bool:
-    """May this person see and study this deck at all?
-
-    Owning it or having been given it. Kept as a separate question from
-    `owns_deck` rather than a flag on one function, because the two answers
-    guard different things and a boolean argument is how they end up confused.
-    """
-    return conn.execute(
-        "SELECT 1 FROM deck d"
-        " LEFT JOIN deck_member m ON m.deck_id = d.id AND m.account_id = %s"
-        " WHERE d.id = %s AND (d.account_id IS NOT DISTINCT FROM %s OR m.account_id IS NOT NULL)",
-        (account_id, deck_id, account_id),
-    ).fetchone() is not None
-
-
-def share_deck(
-    conn: psycopg.Connection, deck_id: str, account_id: str, with_account: str
-) -> None:
-    conn.execute(
-        "INSERT INTO deck_member (deck_id, account_id, shared_by, created_at)"
-        " VALUES (%s, %s, %s, %s) ON CONFLICT (deck_id, account_id) DO NOTHING",
-        (deck_id, with_account, account_id, db.now()),
-    )
-
-
-def unshare_deck(conn: psycopg.Connection, deck_id: str, from_account: str) -> bool:
-    """Take a deck back.
-
-    Their study cards go with it; their review log does not. The log is a
-    record of work somebody did, and unsharing is not a reason to rewrite it --
-    it is also what every leaderboard already counted.
-    """
-    conn.execute(
-        "DELETE FROM study_card WHERE deck_id = %s AND account_id = %s",
-        (deck_id, from_account),
-    )
-    return conn.execute(
-        "DELETE FROM deck_member WHERE deck_id = %s AND account_id = %s",
-        (deck_id, from_account),
-    ).rowcount > 0
 
 
 class DeckNameRejected(Exception):
@@ -157,17 +112,13 @@ def list_decks(conn: psycopg.Connection, account_id: str | None) -> list[dict]:
     """
     rows = conn.execute(
         "SELECT d.id, d.name, d.created_at, d.last_exported_at,"
-        "       (d.account_id IS DISTINCT FROM %s) AS shared_with_me,"
-        "       COALESCE(owner.display_name, owner.email, owner.id::text) AS owner_name,"
         "       (SELECT COUNT(DISTINCT c.card_uuid) FROM card c WHERE c.deck_id = d.id)"
         "         AS card_count,"
         "       (SELECT COUNT(*) FROM job j WHERE j.deck_id = d.id) AS job_count"
         "  FROM deck d"
-        "  LEFT JOIN deck_member m ON m.deck_id = d.id AND m.account_id = %s"
-        "  LEFT JOIN account owner ON owner.id = d.account_id"
-        " WHERE d.account_id IS NOT DISTINCT FROM %s OR m.account_id IS NOT NULL"
+        " WHERE d.account_id IS NOT DISTINCT FROM %s"
         " ORDER BY d.created_at DESC",
-        (account_id, account_id, account_id),
+        (account_id,),
     ).fetchall()
     return [
         {
@@ -181,8 +132,6 @@ def list_decks(conn: psycopg.Connection, account_id: str | None) -> list[dict]:
             ),
             "card_count": row["card_count"],
             "job_count": row["job_count"],
-            "shared_with_me": bool(row["shared_with_me"]),
-            "owner_name": row["owner_name"],
         }
         for row in rows
     ]
@@ -193,18 +142,27 @@ def rename_deck(
 ) -> None:
     """Give a deck a name a person chose.
 
-    Decks are named after whatever file started them, which is how somebody
-    ends up with a deck called `week-3-final-FINAL.pdf` and no idea what is in
-    it six weeks later.
     """
-    cleaned = " ".join(name.split())
+    conn.execute(
+        "UPDATE deck SET name = %s WHERE id = %s", (clean_deck_name(name), deck_id)
+    )
+
+
+def clean_deck_name(name: str | None) -> str:
+    """The name as it will be stored, or the reason it cannot be.
+
+    There is no default. A deck named after the file that started it is how
+    somebody ends up with `week-3-final-FINAL.pdf` and no idea what is in it
+    six weeks later, so the person names it, always.
+    """
+    cleaned = " ".join((name or "").split())
     if not cleaned:
         raise DeckNameRejected("a deck needs a name")
     if "::" in cleaned:
         # Anki reads `::` as deck nesting, so a name containing it would silently
         # become a tree the user did not ask for.
         raise DeckNameRejected("a deck name cannot contain '::'")
-    conn.execute("UPDATE deck SET name = %s WHERE id = %s", (cleaned[:120], deck_id))
+    return cleaned[:120]
 
 
 def entries(conn: psycopg.Connection, deck_id: str) -> list[dict]:

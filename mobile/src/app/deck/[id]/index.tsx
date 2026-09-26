@@ -1,7 +1,6 @@
-// Deck detail: everything the audit found homeless — rename, sharing, the
-// card browser, per-topic mastery, run history — lives here now. The .apkg
-// export lands in the cache and leaves through the share sheet: the native
-// stand-in for the web's browser download.
+// A deck, full screen over the home page: study it, add a lecture to it,
+// browse its topics and cards, rename or delete it. The .apkg export lands in
+// the cache and leaves through the system share sheet.
 import * as FileSystem from "expo-file-system/legacy";
 import { type Href, useLocalSearchParams, useRouter } from "expo-router";
 import { useGoBack } from "../../../lib/nav";
@@ -32,7 +31,7 @@ export default function DeckDetail() {
   const [segment, setSegment] = useState("topics");
   const [cards, setCards] = useState<any[] | null>(null);
   const [search, setSearch] = useState("");
-  const [menu, setMenu] = useState<null | "dots" | "rename" | "share" | "delete">(null);
+  const [menu, setMenu] = useState<null | "dots" | "rename" | "delete">(null);
   const [editing, setEditing] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [studyBusy, setStudyBusy] = useState(false);
@@ -45,7 +44,7 @@ export default function DeckDetail() {
       await api(`/api/decks/${id}`, { method: "DELETE" });
       dropCache("/api");
       toast("Deck deleted");
-      router.replace("/(tabs)/decks" as Href);
+      router.replace("/");
     } catch (problem: any) {
       toast(problem.message);
       setDeleting(false);
@@ -58,10 +57,8 @@ export default function DeckDetail() {
       const [deckList, jobList, deckJobList] = await Promise.all([
         cached("/api/decks", 30_000),
         cached("/api/jobs", 30_000),
-        // The deck's own jobs: /api/jobs lists only the caller's, so on a
-        // shared deck it is empty and topics/export would go dead. This
-        // endpoint answers for owner and recipients alike — complete and
-        // reviewing only, newest first.
+        // The deck's finished jobs, newest first: where its lessons live and
+        // what an export is built from.
         cached(`/api/decks/${id}/jobs`, 30_000).catch(() => ({ jobs: [] })),
       ]);
       const found = deckList.decks.find((d: any) => d.deck_id === id);
@@ -162,11 +159,7 @@ export default function DeckDetail() {
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
         <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
         <Cap style={{ flex: 1, textAlign: "center" }}>{deck.name}</Cap>
-        {deck.shared_with_me ? (
-          <View style={{ width: target.min }} />
-        ) : (
-          <IconBtn name="dots" label="More" onPress={() => setMenu("dots")} />
-        )}
+        <IconBtn name="dots" label="More" onPress={() => setMenu("dots")} />
       </View>
 
       <ScrollView
@@ -180,7 +173,6 @@ export default function DeckDetail() {
         <Cap style={{ textAlign: "center" }}>
           {deck.card_count} cards
           {mastery ? ` · ${mastery.topics.length} topics` : ""}
-          {deck.shared_with_me ? ` · from ${deck.owner_name}` : ""}
         </Cap>
 
         <Button
@@ -189,13 +181,9 @@ export default function DeckDetail() {
           disabled={studyBusy}
         />
 
-        {/* Three-up like the web; the tighter padding stands in for the
-            web's smaller font on this row. */}
         <View style={{ flexDirection: "row", gap: space[2] }}>
           <Button title="Add lecture" kind="ghost" style={{ flex: 1, paddingHorizontal: space[1] }}
-            disabled={deck.shared_with_me} onPress={() => router.push(`/job/new?deck=${id}` as Href)} />
-          <Button title="Share" kind="ghost" style={{ flex: 1, paddingHorizontal: space[1] }}
-            disabled={deck.shared_with_me} onPress={() => setMenu("share")} />
+            onPress={() => router.push(`/job/new?deck=${id}` as Href)} />
           <Button title={exportBusy ? "Exporting…" : "Export"} kind="ghost"
             style={{ flex: 1, paddingHorizontal: space[1] }}
             disabled={exportBusy} onPress={exportDeck} />
@@ -322,8 +310,8 @@ export default function DeckDetail() {
         <Sheet onClose={() => setMenu(null)}>
           <T v="heading">Delete this deck?</T>
           <T v="secondary">
-            “{deck.name}” goes away for everyone it is shared with — all{" "}
-            {deck.card_count} cards, every lesson, its whole upload history.
+            “{deck.name}” goes away for good — all {deck.card_count} cards,
+            every lesson, its whole upload history.
             Reviews already done stay counted. This cannot be undone.
           </T>
           <View style={{ flexDirection: "row", gap: space[2] }}>
@@ -341,7 +329,6 @@ export default function DeckDetail() {
         <RenameSheet deck={deck} onClose={() => setMenu(null)}
           onDone={(name: string) => { setDeck({ ...deck, name }); setMenu(null); dropCache("/api/decks"); }} />
       )}
-      {menu === "share" && <ShareSheet deckId={id!} onClose={() => setMenu(null)} />}
       {editing && (
         <EditSheet card={editing} onClose={() => setEditing(null)}
           onSaved={(front: string, back: string) => {
@@ -392,50 +379,6 @@ function RenameSheet({ deck, onClose, onDone }: { deck: any; onClose: () => void
         <Button title="Cancel" kind="ghost" style={{ flex: 1 }} onPress={onClose} />
         <Button title="Save" style={{ flex: 1 }} onPress={save} disabled={!name.trim()} />
       </View>
-    </Sheet>
-  );
-}
-
-function ShareSheet({ deckId, onClose }: { deckId: string; onClose: () => void }) {
-  const router = useRouter();
-  const toast = useToast();
-  const [friends, setFriends] = useState<any[] | null>(null);
-
-  useEffect(() => {
-    api("/api/friends").then((circle) => setFriends(circle.friends)).catch(() => setFriends([]));
-  }, []);
-
-  const give = async (person: any) => {
-    try {
-      await api(`/api/decks/${deckId}/share`, {
-        method: "POST",
-        body: JSON.stringify({ account_id: person.account_id }),
-      });
-      toast(`Shared with ${person.display_name || "them"}`);
-      onClose();
-    } catch (problem: any) {
-      toast(problem.message);
-    }
-  };
-
-  return (
-    <Sheet onClose={onClose}>
-      <T v="heading">Share this deck</T>
-      {friends === null && <Skeleton h={44} />}
-      {friends?.length === 0 && (
-        <>
-          <T v="secondary">
-            Sharing needs a friend first — add one with their code on the Leaderboard.
-          </T>
-          <Button title="Go to Leaderboard"
-            onPress={() => { onClose(); router.push("/leaderboard"); }} />
-        </>
-      )}
-      {friends?.map((person) => (
-        <Button key={person.account_id} kind="ghost"
-          title={person.display_name || person.account_id.slice(0, 8)}
-          onPress={() => give(person)} />
-      ))}
     </Sheet>
   );
 }

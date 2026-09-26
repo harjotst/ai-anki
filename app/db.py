@@ -51,11 +51,6 @@ CREATE TABLE IF NOT EXISTS account (
     -- SQL statement, because an in-app "make admin" button is a
     -- privilege-escalation feature nobody asked for.
     is_admin          BOOLEAN NOT NULL DEFAULT FALSE,
-    -- Short, shareable, and how somebody is added as a friend. Deliberately
-    -- not their email: an endpoint that reports whether an address has an
-    -- account tells anybody whether an address has an account, one guess at a
-    -- time.
-    friend_code       TEXT UNIQUE,
     created_at        TIMESTAMPTZ NOT NULL
 );
 
@@ -212,7 +207,7 @@ CREATE TABLE IF NOT EXISTS lesson (
 -- Every answer anybody has ever given, and the record everything about
 -- studying is derived from. Append-only: a row is never updated and never
 -- deleted, because the moment it is, offline sync needs conflict resolution,
--- leaderboards stop being recomputable, and the scheduler can never be
+-- statistics stop being recomputable, and the scheduler can never be
 -- replaced.
 --
 -- `client_uuid` is chosen by the device that recorded the answer. It is what
@@ -258,42 +253,6 @@ CREATE TABLE IF NOT EXISTS study_card (
 
 CREATE INDEX IF NOT EXISTS study_due_idx ON study_card(account_id, deck_id, due);
 
--- Who studies a deck they did not make. The deck's own `account_id` is still
--- the owner -- whoever uploaded the material and can add more of it -- and this
--- is everybody else.
---
--- Joined, not copied. Both people study the same card identities, which is the
--- only arrangement in which "who has mastered this topic" is a question about
--- one thing rather than two things that resemble each other. Scheduling has
--- always been keyed on (account, card), so separate histories over shared cards
--- needed nothing new.
-CREATE TABLE IF NOT EXISTS deck_member (
-    deck_id           TEXT NOT NULL REFERENCES deck(id) ON DELETE CASCADE,
-    account_id        UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    shared_by         UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    created_at        TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (deck_id, account_id)
-);
-
-CREATE INDEX IF NOT EXISTS deck_member_account_idx ON deck_member(account_id);
-
--- One row per friendship, never two. Storing both directions means two rows
--- that can disagree, and eventually they do: somebody removes a friend and half
--- of it is left behind. The pair is ordered so the row is unique whichever way
--- round it was created, and `requested_by` is what stops somebody accepting
--- their own request.
-CREATE TABLE IF NOT EXISTS friendship (
-    account_low       UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    account_high      UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    state             TEXT NOT NULL,
-    requested_by      UUID NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    created_at        TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (account_low, account_high),
-    CHECK (account_low < account_high)
-);
-
-CREATE INDEX IF NOT EXISTS friendship_high_idx ON friendship(account_high);
-
 -- Progress, as a durable record rather than a live one. A row is appended in
 -- the same transaction as the change it reports, so an event exists exactly
 -- when the change it describes survived -- which is what lets a client that was
@@ -329,17 +288,12 @@ CREATE INDEX IF NOT EXISTS job_event_job_idx ON job_event(job_id, id);
 
 -- Additive changes to tables that already exist somewhere. The CREATEs above
 -- only shape a fresh database; a deployed one needs the same end state.
-ALTER TABLE account ADD COLUMN IF NOT EXISTS username TEXT;
-
 -- What the user told us at upload, kept on the job because every pass reads
 -- it: free-text focus/skip instructions, and how deep to go (1 bare to 5
 -- exhaustive; NULL means level 3, the model's own judgment, and adds nothing
 -- to any prompt).
 ALTER TABLE job ADD COLUMN IF NOT EXISTS guidance TEXT;
 ALTER TABLE job ADD COLUMN IF NOT EXISTS detail_level INTEGER;
-
--- Unique case-insensitively: @Harjot and @harjot are one person or a scam.
-CREATE UNIQUE INDEX IF NOT EXISTS account_username_idx ON account(lower(username));
 """
 
 

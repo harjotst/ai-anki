@@ -9,12 +9,11 @@ import json, random, sys
 from datetime import datetime, timedelta
 
 sys.path.insert(0, ".")
-from app import db, social, study
+from app import db, study
 
 random.seed(41)
 TZ = datetime.now().astimezone().tzinfo
 DEV = "00000000-0000-0000-0000-0000000000aa"
-MAYA = "00000000-0000-0000-0000-0000000000bb"
 TODAY = datetime(2026, 8, 22, tzinfo=TZ)
 
 def d(y, m, day, h=12):
@@ -182,14 +181,6 @@ conn.execute(
     "INSERT INTO account (id, email, display_name, is_admin, created_at) VALUES (%s,%s,%s,%s,%s)"
     " ON CONFLICT (id) DO NOTHING",
     (DEV, "dev@local.test", "Harjot", True, d(2026, 7, 14)))
-conn.execute(
-    "INSERT INTO account (id, email, display_name, is_admin, created_at) VALUES (%s,%s,%s,%s,%s)"
-    " ON CONFLICT (id) DO NOTHING",
-    (MAYA, "maya@local.test", "Maya Chen", False, d(2026, 7, 20)))
-social.friend_code(conn, DEV)
-social.friend_code(conn, MAYA)
-social.claim_username(conn, DEV, "harjot")
-social.claim_username(conn, MAYA, "maya")
 
 for deck_id, name, created in DECKS:
     conn.execute("INSERT INTO deck (id, account_id, name, created_at) VALUES (%s,%s,%s,%s)"
@@ -223,16 +214,7 @@ conn.execute("INSERT INTO lesson (job_id, topic_id, deck_path, lesson_json, crea
              " ('j-cardiac','cardiac-cycle','Cardiac Physiology::Cardiac Cycle',%s,%s)"
              " ON CONFLICT DO NOTHING", (json.dumps(LESSON_CC), d(2026, 7, 28, 13)))
 
-# Friendship: accepted, requested by Maya.
-low, high = sorted([DEV, MAYA])
-conn.execute("INSERT INTO friendship (account_low, account_high, state, requested_by, created_at)"
-             " VALUES (%s,%s,'accepted',%s,%s) ON CONFLICT DO NOTHING",
-             (low, high, MAYA, d(2026, 8, 10)))
-# Maya studies the enzyme deck too.
-conn.execute("INSERT INTO deck_member (deck_id, account_id, shared_by, created_at)"
-             " VALUES ('d-enzyme',%s,%s,%s) ON CONFLICT DO NOTHING", (MAYA, DEV, d(2026, 8, 12)))
-
-for account, deck_id in [(DEV, "d-enzyme"), (DEV, "d-cardiac"), (DEV, "d-renal"), (MAYA, "d-enzyme")]:
+for account, deck_id in [(DEV, "d-enzyme"), (DEV, "d-cardiac"), (DEV, "d-renal")]:
     study.enrol(conn, account, deck_id)
 
 # --- history ---------------------------------------------------------------
@@ -281,13 +263,6 @@ for day_off in range(17):
     day = first_dev_day + timedelta(days=day_off)
     study_day(DEV, random.choice(uuids["d-enzyme"]), day, hour_base=8)
 
-for i, card in enumerate(uuids["d-enzyme"][:8]):           # Maya: lighter
-    intro = d(2026, 8, 15) + timedelta(days=i % 3)
-    for off in [0, 2, 5]:
-        day = intro + timedelta(days=off)
-        if day <= d(2026, 8, 21):
-            study_day(MAYA, card, day)
-
 for account, card in sorted(touched):
     study.rebuild(conn, account, card)
 
@@ -298,5 +273,3 @@ due = conn.execute("SELECT count(*) AS n FROM study_card WHERE account_id=%s AND
 total = conn.execute("SELECT count(*) AS n FROM review WHERE account_id=%s", (DEV,)).fetchone()
 days = conn.execute("SELECT count(DISTINCT date(reviewed_at)) AS n FROM review WHERE account_id=%s", (DEV,)).fetchone()
 print(f"dev: {total['n']} reviews over {days['n']} days, {due['n']} cards due now")
-maya = conn.execute("SELECT count(*) AS n FROM review WHERE account_id=%s", (MAYA,)).fetchone()
-print(f"maya: {maya['n']} reviews")

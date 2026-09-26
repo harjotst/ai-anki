@@ -1,6 +1,5 @@
-// The upload screen, phone side: pick lecture files, choose the deck they
-// feed, hand them to the pipeline. Mirrors the web's /job/new — same field
-// names, same copy — with the file input swapped for the system picker.
+// The upload screen: pick lecture files, choose the deck they feed — or
+// name a new one — and hand them to the pipeline.
 import * as DocumentPicker from "expo-document-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useGoBack } from "../../lib/nav";
@@ -47,7 +46,7 @@ export default function NewJob() {
 
   useEffect(() => {
     cached("/api/decks", 60_000)
-      .then((body) => setDecks(body.decks.filter((d: any) => !d.shared_with_me)))
+      .then((body) => setDecks(body.decks))
       .catch(() => {});
   }, []);
 
@@ -57,8 +56,8 @@ export default function NewJob() {
       copyToCacheDirectory: true,
     });
     if (result.canceled) return;
-    // A fresh pick is a fresh batch — the native mirror of the web clearing
-    // its input after a failure so the same file can be chosen again.
+    // A fresh pick is a fresh batch, so the same file can be chosen again
+    // after a failure.
     created.current.clear();
     planFired.current.clear();
     setFiles(result.assets);
@@ -82,11 +81,12 @@ export default function NewJob() {
         let jobId = created.current.get(file.uri);
         if (!jobId) {
           // The cache copy's basename is a UUID; the asset's name is the
-          // file the user picked, and it is what names the deck.
+          // file the user picked. A new deck is named by the person — the
+          // server refuses one without a name.
           const parameters: Record<string, string> = {};
           if (file.name) parameters.filename = file.name;
           if (targetDeck) parameters.deck_id = targetDeck;
-          else if (deckName.trim()) parameters.deck_name = deckName.trim();
+          else parameters.deck_name = deckName.trim();
           if (guidance.trim()) parameters.guidance = guidance.trim();
           if (detail !== "3") parameters.detail_level = detail;
           const { job_id } = await uploadFile("/api/jobs", file.uri, {

@@ -77,6 +77,58 @@ def test_the_baseline_can_be_rolled_back(second_schema):
     assert shape(second_schema) == {}
 
 
+def test_a_database_with_friends_in_it_loses_them_and_keeps_its_own_decks(second_schema):
+    """0002 runs against production, which has friendships and shared decks in
+    it. Downgrading to the baseline puts that shape back, so the upgrade is
+    exercised against real rows rather than an empty schema."""
+    assert alembic(second_schema, "upgrade", "head").returncode == 0
+    assert alembic(second_schema, "downgrade", "0001_baseline").returncode == 0
+
+    owner, friend = "00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000b"
+    conn = psycopg.connect(second_schema, autocommit=True)
+    try:
+        for who, name in ((owner, "owner"), (friend, "friend")):
+            conn.execute(
+                "INSERT INTO account (id, created_at, username, friend_code)"
+                " VALUES (%s, now(), %s, %s)",
+                (who, name, name.upper()),
+            )
+        conn.execute("INSERT INTO deck (id, account_id, name, created_at) VALUES ('d1', %s, 'Bio', now())", (owner,))
+        conn.execute(
+            "INSERT INTO friendship (account_low, account_high, state, requested_by, created_at)"
+            " VALUES (%s, %s, 'accepted', %s, now())",
+            (owner, friend, owner),
+        )
+        conn.execute(
+            "INSERT INTO deck_member (deck_id, account_id, shared_by, created_at)"
+            " VALUES ('d1', %s, %s, now())",
+            (friend, owner),
+        )
+        for who in (owner, friend):
+            conn.execute(
+                "INSERT INTO study_card (account_id, card_uuid, deck_id, due)"
+                " VALUES (%s, 'c1', 'd1', now())",
+                (who,),
+            )
+    finally:
+        conn.close()
+
+    upgraded = alembic(second_schema, "upgrade", "head")
+    assert upgraded.returncode == 0, upgraded.stderr
+
+    tables = {table for table, _ in shape(second_schema)}
+    columns = {column for table, column in shape(second_schema) if table == "account"}
+    assert "friendship" not in tables and "deck_member" not in tables
+    assert "username" not in columns and "friend_code" not in columns
+
+    conn = psycopg.connect(second_schema, autocommit=True)
+    try:
+        studying = conn.execute("SELECT account_id::text FROM study_card").fetchall()
+    finally:
+        conn.close()
+    assert studying == [(owner,)], "the owner keeps their schedule; the friend's goes with the share"
+
+
 def test_there_is_exactly_one_head(second_schema):
     """Two heads is a merge nobody noticed, and `upgrade head` then fails at the
     worst moment — during a deploy."""

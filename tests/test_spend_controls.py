@@ -18,7 +18,7 @@ def start(client, claude, tokens=1000, deck_id=None):
     return client.post(
         "/api/jobs",
         files={"file": ("lecture.txt", b"Material.", "text/plain")},
-        data={"deck_id": deck_id} if deck_id else {},
+        data={"deck_id": deck_id} if deck_id else {"deck_name": "Lecture"},
     ).json()["job_id"]
 
 

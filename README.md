@@ -73,7 +73,7 @@ Found by building the image and running a restore, not by reading about it.
 |---|---|
 | **Backend** | FastAPI, Postgres (psycopg 3), Alembic |
 | **Auth** | Supabase — Google, Apple, email |
-| **Frontend** | React + Vite |
+| **App** | Expo (React Native) — iOS and Android, in `mobile/` |
 | **Generation** | Anthropic API, three passes, prompt caching, structured outputs |
 | **Packaging** | genanki, with the official `anki` package as a *test-only* dependency |
 | **Deployment** | Fly.io, one machine, LibreOffice for conversion |

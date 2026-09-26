@@ -31,8 +31,7 @@ let devToken: string | null = null;
 export type SessionKind = "supabase" | "dev" | null;
 
 let currentKind: SessionKind = null;
-/** What kind of session the app is on right now — the You screen words
- *  itself differently for the development bypass. */
+/** What kind of session the app is on right now. */
 export const sessionKind = () => currentKind;
 
 // Sign-in state changes reach the gate through here, whichever side they
@@ -61,9 +60,8 @@ if (supabase) {
 }
 
 async function fetchDevToken(): Promise<string | null> {
-  // In real mode the SPA catch-all answers this path with HTML and a 200 —
-  // which iOS then happily caches. So: only a JSON body with a token counts,
-  // and the timestamp defeats a cached copy of the wrong answer.
+  // Only a JSON body with a token counts — anything else is a server that is
+  // not the dev server — and the timestamp defeats a cached wrong answer.
   try {
     const response = await fetch(`${BASE}/dev/token?t=${Date.now()}`);
     if (!response.ok) return null;
@@ -112,6 +110,15 @@ export async function accessToken(): Promise<string | null> {
     if (data.session?.access_token) return data.session.access_token;
   }
   return devToken;
+}
+
+/** The picture the sign-in provider holds for this person, if any. Google
+ *  has one; Apple never does, and the dev bypass has no provider at all. */
+export async function avatarUrl(): Promise<string | null> {
+  if (!supabase) return null;
+  const { data } = await supabase.auth.getSession();
+  const meta = data.session?.user?.user_metadata;
+  return meta?.avatar_url || meta?.picture || null;
 }
 
 export async function signOut() {

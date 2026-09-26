@@ -330,7 +330,7 @@ def test_a_deck_is_produced_end_to_end_on_a_non_anthropic_provider(vendor_client
     vendor.scripted = [PLAN, CARDS]
 
     job_id = client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     assert client.post(f"/api/jobs/{job_id}/plan").status_code == 200
     assert client.post(f"/api/jobs/{job_id}/generate").status_code == 200
@@ -349,7 +349,7 @@ def test_the_pipeline_sends_the_vendors_own_request_shape(vendor_client):
     vendor.scripted = [PLAN, CARDS]
 
     job_id = client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
 
@@ -379,7 +379,7 @@ def test_cost_is_billed_at_the_active_providers_rates_not_anthropics(vendor_clie
     vendor.scripted = [PLAN, CARDS]
 
     job_id = client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
     client.post(f"/api/jobs/{job_id}/plan")
     client.post(f"/api/jobs/{job_id}/generate")
@@ -632,7 +632,7 @@ def test_a_file_handle_from_one_vendor_is_never_sent_to_another(pg_dsn, tmp_path
     conn = db.connect(pg_dsn)
     try:
         job_id = jobs.create_job(
-            conn, tmp_path, "notes.pdf", b"%PDF-1.4 stub", account_id=None
+            conn, tmp_path, "notes.pdf", b"%PDF-1.4 stub", account_id=None, deck_name="Notes"
         )
 
         first = Vendor("anthropic")

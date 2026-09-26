@@ -31,7 +31,7 @@ READ_CACHE = {"input_tokens": 400, "cache_read_input_tokens": 200_000, "output_t
 
 def upload(client):
     return client.post(
-        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", b"Material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
 
 

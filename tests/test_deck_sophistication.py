@@ -42,7 +42,7 @@ CARDS = {
 
 def upload(client, text=b"Glycolysis material."):
     return client.post(
-        "/api/jobs", files={"file": ("lecture.txt", text, "text/plain")}
+        "/api/jobs", files={"file": ("lecture.txt", text, "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
 
 

@@ -1,7 +1,6 @@
-// GENERATED from tokens.json by scripts/emit-tokens.mjs — do not hand-edit.
-// The React Native theme object: plain values, no CSS.
+// Every color and scale in the app. The only file allowed to hold a color —
+// tests/test_design_system.py fails the build on a hex literal anywhere else.
 export const tokens = {
-  "_": "Source of truth for every color and scale in ai-anki, web and mobile. Emitted as tokens.css and tokens.ts by scripts/emit-tokens.mjs. CI fails the build on any hex literal outside these generated files.",
   "color": {
     "light": {
       "bg": "#FAF9F7",

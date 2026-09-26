@@ -24,7 +24,7 @@ PLAN = {
 
 def upload_pdf(client, name="lecture.pdf"):
     return client.post(
-        "/api/jobs", files={"file": (name, PDF, "application/pdf")}
+        "/api/jobs", files={"file": (name, PDF, "application/pdf")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
 
 
@@ -141,7 +141,7 @@ def test_a_scanned_pdf_goes_through_the_same_path_with_no_ocr_stage(client, clau
 def test_a_text_upload_still_goes_inline_and_costs_no_upload(client, claude):
     claude.counts_tokens(500).replies_json(PLAN)
     job_id = client.post(
-        "/api/jobs", files={"file": ("notes.txt", b"Some material.", "text/plain")}
+        "/api/jobs", files={"file": ("notes.txt", b"Some material.", "text/plain")}, data={"deck_name": "Lecture"}
     ).json()["job_id"]
 
     client.post(f"/api/jobs/{job_id}/plan")

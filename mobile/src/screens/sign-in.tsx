@@ -71,8 +71,8 @@ export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
       <Mascot size={132} />
       <T v="display" style={{ marginTop: 8 }}>ai-anki</T>
       <T v="secondary" style={{ marginBottom: space[3] }}>
-        Study a little every day. Sign in and your decks, streak and friends
-        are on every device you own.
+        Turn lectures into flashcards, and study a little every day. Sign in
+        and your decks are on every device you own.
       </T>
 
       {configured && (
