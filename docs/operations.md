@@ -243,11 +243,11 @@ has returned, so auto-stopping on idle HTTP would kill runs part-way through.
 ### First deploy
 
 ```bash
-fly launch --no-deploy --copy-config --name ai-anki --region lhr
+fly launch --no-deploy --copy-config --name ai-anki --region sjc
 ```
 
 ```bash
-fly volumes create ai_anki_data --region lhr --size 3
+fly volumes create ai_anki_data --region sjc --size 3
 ```
 
 The volume holds uploads and `TMPDIR` only. The database is Supabase's now,
