@@ -102,7 +102,7 @@ def test_ci_runs_strict_config_validation():
     workflow = ROOT / ".github" / "workflows" / "ci.yml"
     assert workflow.exists()
     text = workflow.read_text()
-    assert "fly config validate --strict" in text
+    assert "flyctl config validate --strict" in text
     assert "pytest" in text
 
 
