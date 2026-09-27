@@ -8,7 +8,7 @@
 // Callers remount with key={topic_id} (or equivalent) when the lesson
 // changes; step and reveal state never outlive a lesson.
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Animated, ScrollView, View } from "react-native";
+import { Animated, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { radius, space, target, usePalette } from "../theme";
 import { Button, Cap, Icon, IconBtn, T } from "./index";
@@ -224,8 +224,10 @@ export function LessonSteps({
       paddingTop: insets.top, paddingBottom: insets.bottom + space[2],
     }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
-        <IconBtn name="chevL" label="Back"
-          onPress={() => (at === 0 ? onExit() : setIndex(at - 1))} />
+        {/* Two arrows, two jobs: this one always leaves the lesson; the one
+            beside Continue pages back a step. One arrow doing both meant a
+            reader on step 8 had to tap it eight times to get out. */}
+        <IconBtn name="chevL" label="Leave lesson" onPress={onExit} />
         {step.kind !== "done" ? (
           <IconBtn name={voice.state === "playing" ? "pause" : "sound"}
             label={voice.state === "playing" ? "Pause" : "Read this to me"}
@@ -277,7 +279,21 @@ export function LessonSteps({
           <Button title="Read again" kind="ghost"
             onPress={() => { setRevealed(new Set()); setIndex(0); }} />
         )}
-        <Button title={primaryLabel} style={{ minHeight: target.rating }} onPress={onPrimary} />
+        <View style={{ flexDirection: "row", gap: space[2] }}>
+          {at > 0 && (
+            <Pressable accessibilityRole="button" accessibilityLabel="Previous step"
+              onPress={() => setIndex(at - 1)}
+              style={({ pressed }) => ({
+                width: target.rating, minHeight: target.rating, borderRadius: radius.md,
+                borderWidth: 1, borderColor: palette.borderStrong,
+                alignItems: "center", justifyContent: "center",
+                backgroundColor: pressed ? palette.sunken : palette.surface,
+              })}>
+              <Icon name="chevL" size={20} color={palette.text} />
+            </Pressable>
+          )}
+          <Button title={primaryLabel} style={{ flex: 1, minHeight: target.rating }} onPress={onPrimary} />
+        </View>
       </View>
     </View>
   );

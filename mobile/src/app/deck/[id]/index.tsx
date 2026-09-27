@@ -174,8 +174,8 @@ export default function DeckDetail() {
         }}
       >
         <Cap style={{ textAlign: "center" }}>
-          {deck.card_count} cards
-          {mastery ? ` · ${mastery.topics.length} topics` : ""}
+          {deck.card_count} card{deck.card_count === 1 ? "" : "s"}
+          {mastery ? ` · ${mastery.topics.length} topic${mastery.topics.length === 1 ? "" : "s"}` : ""}
         </Cap>
 
         <Button
@@ -204,6 +204,7 @@ export default function DeckDetail() {
               // card topic_id 'imported', so any topic_id-keyed count hands
               // each subdeck row the whole deck's due pile.
               const dueHere = (due || []).filter((c: any) => c.deck_path === topic.deck_path).length;
+              const reviewDue = (due || []).some((c: any) => c.deck_path === topic.deck_path && c.reps > 0);
               const pct = Math.round(topic.mastery * 100);
               return (
                 <Pressable key={topic.deck_path}
@@ -218,9 +219,10 @@ export default function DeckDetail() {
                     <T v="body" style={{ fontWeight: "600" }} numberOfLines={1}>
                       {topic.deck_path.split("::").pop()}
                     </T>
-                    {/* Copy rule: decayed retrievability is "due for review",
-                        never "forgotten". */}
-                    {pct < 40 && topic.mastery > 0 && <Cap>due for review</Cap>}
+                    {/* "due for review" means a card already studied has come
+                        due again — never "forgotten", and never merely low
+                        mastery, which read as wrong right after a review. */}
+                    {reviewDue && <Cap>due for review</Cap>}
                   </View>
                   <View style={{ width: 56, height: 4, borderRadius: 2, backgroundColor: palette.sunken, overflow: "hidden" }}>
                     <View style={{ width: `${pct}%`, height: 4, borderRadius: 2, backgroundColor: palette.accent }} />
