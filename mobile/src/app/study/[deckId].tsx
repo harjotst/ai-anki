@@ -12,7 +12,7 @@ import { cached, dropCache, dueCounts } from "../../lib/data";
 import { enqueue, flush, pendingCount, removeQueued, subscribe, uuid } from "../../lib/queue";
 import { api } from "../../lib/session";
 import { radius, space, target, usePalette } from "../../theme";
-import { Button, Cap, CardBox, CardText, ErrorCard, Icon, IconBtn, Pill, Sheet, Skeleton, T, useToast } from "../../ui";
+import { Button, Cap, CardBox, CardText, ClozeFilled, ErrorCard, Icon, IconBtn, Pill, Sheet, Skeleton, T, useToast } from "../../ui";
 import { Sci } from "../../ui/sci";
 
 const RATING_META: [string, string][] = [
@@ -159,16 +159,24 @@ export default function Study() {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{
         flexGrow: 1, justifyContent: "center", padding: space[5], gap: space[4],
       }}>
+        {/* A cloze answers in place: the blank fills with the answer, the
+            way Anki does it, instead of the sentence repeating underneath. */}
         <View>
-          <CardText text={card.rendered_front || card.front} />
+          {revealed && card.note_type === "cloze"
+            ? <ClozeFilled text={card.front} />
+            : <CardText text={card.rendered_front || card.front} />}
         </View>
         {revealed && (
           <>
-            <View style={{ height: 1, backgroundColor: palette.border }} />
-            <Sci text={answerText(card)}
-              style={{ fontSize: 18, lineHeight: 27, color: palette.text2 }} />
+            {card.note_type !== "cloze" && (
+              <>
+                <View style={{ height: 1, backgroundColor: palette.border }} />
+                <Sci text={answerText(card)}
+                  style={{ fontSize: 18, lineHeight: 27, color: palette.text2 }} />
+              </>
+            )}
             {/* A cloze's back, when it exists, is extra context under the
-                revealed sentence — never the answer itself. */}
+                filled sentence — never the answer itself. */}
             {card.note_type === "cloze" && !!card.back && card.back !== card.front && (
               <Sci text={card.back} style={{ fontSize: 15, lineHeight: 22, color: palette.muted }} />
             )}

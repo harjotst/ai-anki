@@ -9,6 +9,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Circle, Path } from "react-native-svg";
 import { font, radius, space, target, usePalette } from "../theme";
+import { clozeSegments } from "../lib/cloze";
 import { Sci } from "./sci";
 
 // --- icons -----------------------------------------------------------------
@@ -316,6 +317,26 @@ export function CardText({ text, size = 18 }: { text: string; size?: number }) {
   const palette = usePalette();
   return (
     <Sci text={text} style={{ fontSize: size, lineHeight: size * 1.5, color: palette.text }} />
+  );
+}
+
+/** A cloze card answered: its sentence with every deletion filled in place,
+ *  marked in the accent colour — the blank becomes the answer, as in Anki. */
+export function ClozeFilled({ text, size = 18, numberOfLines }: {
+  text: string; size?: number; numberOfLines?: number;
+}) {
+  const palette = usePalette();
+  return (
+    <Text numberOfLines={numberOfLines}
+      style={{ fontSize: size, lineHeight: size * 1.5, color: palette.text }}>
+      {clozeSegments(text).map((segment, index) =>
+        segment.answer ? (
+          <Sci key={index} text={segment.text}
+            style={{ fontSize: size, fontWeight: "700", color: palette.accent }} />
+        ) : (
+          <Sci key={index} text={segment.text} style={{ fontSize: size }} />
+        ))}
+    </Text>
   );
 }
 

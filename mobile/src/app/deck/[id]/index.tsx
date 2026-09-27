@@ -1,5 +1,6 @@
-// A deck, full screen over the home page: study it, add a lecture to it,
-// browse its topics and cards, rename or delete it. The .apkg export lands in
+// A deck, full screen over the home page: study it, browse its topics and
+// cards, read the document it was made from, rename or delete it. New
+// material is a new deck — a deck is one upload. The .apkg export lands in
 // the cache and leaves through the system share sheet.
 import * as FileSystem from "expo-file-system/legacy";
 import { type Href, useLocalSearchParams, useRouter } from "expo-router";
@@ -8,11 +9,11 @@ import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, TextInput, View, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { answerText, clozeReveal } from "../../../lib/cloze";
+import { answerText } from "../../../lib/cloze";
 import { cached, dropCache } from "../../../lib/data";
 import { api, authHeaders, BASE } from "../../../lib/session";
 import { radius, space, target, usePalette } from "../../../theme";
-import { Button, Cap, ErrorCard, Icon, IconBtn, Pill, Seg, Sheet, Skeleton, T, useToast } from "../../../ui";
+import { Button, Cap, ClozeFilled, ErrorCard, Icon, IconBtn, Pill, Seg, Sheet, Skeleton, T, useToast } from "../../../ui";
 import { EditSheet } from "../../study/[deckId]";
 
 export default function DeckDetail() {
@@ -181,16 +182,11 @@ export default function DeckDetail() {
           disabled={studyBusy}
         />
 
-        <View style={{ flexDirection: "row", gap: space[2] }}>
-          <Button title="Add lecture" kind="ghost" style={{ flex: 1, paddingHorizontal: space[1] }}
-            onPress={() => router.push(`/job/new?deck=${id}` as Href)} />
-          <Button title={exportBusy ? "Exporting…" : "Export"} kind="ghost"
-            style={{ flex: 1, paddingHorizontal: space[1] }}
-            disabled={exportBusy} onPress={exportDeck} />
-        </View>
+        <Button title={exportBusy ? "Exporting…" : "Export"} kind="ghost"
+          disabled={exportBusy} onPress={exportDeck} />
 
         <Seg
-          options={[["topics", "Topics"], ["cards", "Cards"], ["history", "History"]]}
+          options={[["topics", "Topics"], ["cards", "Cards"], ["document", "Document"]]}
           value={segment}
           onChange={setSegment}
         />
@@ -263,10 +259,19 @@ export default function DeckDetail() {
                   <Pressable key={card.card_uuid} onPress={() => setEditing(card)}
                     style={({ pressed }) => navrow(pressed)}>
                     <View style={{ flex: 1, gap: 2 }}>
-                      <T v="body" style={{ fontWeight: "600" }} numberOfLines={1}>{clozeReveal(card.front)}</T>
-                      <T v="caption" numberOfLines={1} style={{ letterSpacing: 0.2 }}>
-                        {card.note_type === "cloze" ? card.back || "cloze" : answerText(card)}
-                      </T>
+                      {card.note_type === "cloze" ? (
+                        <>
+                          <ClozeFilled text={card.front} size={16} numberOfLines={2} />
+                          {!!card.back && card.back !== card.front && (
+                            <T v="caption" numberOfLines={1}>{card.back}</T>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <T v="body" style={{ fontWeight: "600" }} numberOfLines={1}>{card.front}</T>
+                          <T v="caption" numberOfLines={1} style={{ letterSpacing: 0.2 }}>{answerText(card)}</T>
+                        </>
+                      )}
                     </View>
                     <Icon name="edit" size={16} color={palette.muted} />
                   </Pressable>
@@ -275,27 +280,28 @@ export default function DeckDetail() {
           </>
         )}
 
-        {segment === "history" && (
+        {/* The document the deck was made from, opened in a reader. An
+            imported .apkg has no document behind it, so it is named only. */}
+        {segment === "document" && (
           <View style={{ gap: space[2] }}>
-            {jobs.length === 0 && <T v="secondary">No uploads yet.</T>}
-            {jobs.map((job) => (
-              <View key={job.job_id} style={navrow(false)}>
-                <View style={{ flex: 1, gap: 2 }}>
-                  <T v="secondary" style={{ fontWeight: "600", color: palette.text }} numberOfLines={1}>
-                    {job.source_filename || "Imported"}
-                  </T>
-                  <Cap>
-                    {new Date(job.created_at).toLocaleDateString()} ·{" "}
-                    {job.state === "failed" ? job.error || "failed" : job.state}
-                    {job.card_count ? ` · ${job.card_count} cards` : ""}
-                  </Cap>
-                </View>
-                {["interrupted", "failed", "dead", "plan_ready", "generating", "planning"].includes(job.state) && (
-                  <Button kind="ghost" onPress={() => router.push(`/job/${job.job_id}` as Href)}
-                    title={job.state === "interrupted" ? "Resume" : job.state === "failed" ? "Retry" : "Open"} />
-                )}
-              </View>
-            ))}
+            {jobs.length === 0 && <T v="secondary">No document for this deck.</T>}
+            {jobs.map((job) => {
+              const name = job.source_filename || "Imported deck";
+              const readable = !!job.source_filename && !/\.apkg$/i.test(job.source_filename);
+              return (
+                <Pressable key={job.job_id} disabled={!readable}
+                  onPress={() => router.push(
+                    `/job/${job.job_id}/source?name=${encodeURIComponent(name)}` as Href)}
+                  style={({ pressed }) => navrow(pressed)}>
+                  <Icon name="doc" size={18} color={palette.muted} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <T v="body" style={{ fontWeight: "600" }} numberOfLines={2}>{name}</T>
+                    <Cap>Uploaded {new Date(job.created_at).toLocaleDateString()}</Cap>
+                  </View>
+                  {readable && <Icon name="chevR" size={16} color={palette.muted} />}
+                </Pressable>
+              );
+            })}
           </View>
         )}
       </ScrollView>
@@ -311,7 +317,7 @@ export default function DeckDetail() {
           <T v="heading">Delete this deck?</T>
           <T v="secondary">
             “{deck.name}” goes away for good — all {deck.card_count} cards,
-            every lesson, its whole upload history.
+            every lesson, its uploaded document.
             Reviews already done stay counted. This cannot be undone.
           </T>
           <View style={{ flexDirection: "row", gap: space[2] }}>

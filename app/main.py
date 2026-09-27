@@ -7,6 +7,7 @@ reachable from here; nothing below it is reached into directly by tests.
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import re
 import time as _time
 from contextlib import asynccontextmanager
@@ -14,7 +15,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from app import auth, backup, budget, db, generation, identity, importing, ingestion
 from app import jobs, ledger, packaging, planning, progress, providers, study
@@ -290,6 +291,31 @@ def create_app(
             "guidance": job.guidance,
             "detail_level": job.detail_level,
         }
+
+    @app.get("/api/jobs/{job_id}/source")
+    def read_source(
+        job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)
+    ):
+        """The document this job was made from, for reading on the phone.
+
+        A presentation or document comes back as the PDF it was converted to,
+        because that is what a phone can open. A purged upload is 410 rather
+        than 404: the job is real and theirs, only the file is gone.
+        """
+        owned_job(conn, job_id, account.id)
+        sources = jobs.load_sources(conn, job_id)
+        if not sources:
+            raise HTTPException(status_code=404, detail="job has no source")
+        source = sources[0]
+        converted = Path(source.converted_path) if source.converted_path else None
+        if converted and converted.is_file():
+            path, name = converted, Path(source.filename).stem + ".pdf"
+        elif str(source.stored_path) and source.stored_path.is_file():
+            path, name = source.stored_path, source.filename
+        else:
+            raise HTTPException(status_code=410, detail="the original file is no longer stored")
+        media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        return FileResponse(path, media_type=media_type, filename=name)
 
     @app.get("/api/jobs/{job_id}/topics")
     def read_topics(job_id: str, conn=Depends(get_conn)):
