@@ -3,7 +3,7 @@
 // material is a new deck — a deck is one upload. The .apkg export lands in
 // the cache and leaves through the system share sheet.
 import * as FileSystem from "expo-file-system/legacy";
-import { type Href, useLocalSearchParams, useRouter } from "expo-router";
+import { type Href, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useGoBack } from "../../../lib/nav";
 import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useState } from "react";
@@ -78,7 +78,9 @@ export default function DeckDetail() {
     }
   }, [id]);
 
-  useEffect(() => { load(); }, [load]);
+  // On focus, not on mount: this screen stays mounted under Study, so coming
+  // back from a session must re-read what is due or the count lies.
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   useEffect(() => {
     if (segment === "cards" && cards === null) {

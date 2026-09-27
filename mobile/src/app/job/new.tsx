@@ -1,16 +1,17 @@
-// The upload screen: pick lecture files, choose the deck they feed — or
-// name a new one — and hand them to the pipeline.
+// The upload screen: name a new deck, pick its lecture files, and hand them
+// to the pipeline. Always a new deck — new material is a new deck, never an
+// addition to an old one.
 import * as DocumentPicker from "expo-document-picker";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { useGoBack } from "../../lib/nav";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { cached, dropCache } from "../../lib/data";
+import { dropCache } from "../../lib/data";
 import { askOnce } from "../../lib/notify";
 import { api, uploadFile } from "../../lib/session";
 import { radius, space, target, usePalette } from "../../theme";
-import { Button, Cap, ErrorCard, Icon, IconBtn, Seg, Sheet, T } from "../../ui";
+import { Button, Cap, ErrorCard, Icon, IconBtn, Seg, T } from "../../ui";
 
 // The five-point depth scale, mirrored from the server's DETAIL_LEVELS. 3 is
 // the model's own judgment of the material and sends nothing at all.
@@ -28,27 +29,16 @@ export default function NewJob() {
   const goBack = useGoBack();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
-  const { deck } = useLocalSearchParams<{ deck?: string }>();
-
-  const [decks, setDecks] = useState<any[]>([]);
-  const [deckId, setDeckId] = useState(typeof deck === "string" ? deck : "");
   const [files, setFiles] = useState<DocumentPicker.DocumentPickerAsset[]>([]);
   const [deckName, setDeckName] = useState("");
   const [detail, setDetail] = useState("3");
   const [guidance, setGuidance] = useState("");
-  const [choosing, setChoosing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Jobs already created from this batch, so a retry after a mid-batch
   // failure resumes instead of duplicating the files that got through.
   const created = useRef(new Map<string, string>());
   const planFired = useRef(new Set<string>());
-
-  useEffect(() => {
-    cached("/api/decks", 60_000)
-      .then((body) => setDecks(body.decks))
-      .catch(() => {});
-  }, []);
 
   const pick = async () => {
     const result = await DocumentPicker.getDocumentAsync({
@@ -73,9 +63,9 @@ export default function NewJob() {
     askOnce();
     try {
       // POST /api/jobs takes exactly one file, so each picked file becomes
-      // its own job — all into the same deck: the first upload founds it
-      // when none was chosen, the rest continue it.
-      let targetDeck = deckId;
+      // its own job — all into the same deck: the first upload founds it,
+      // the rest continue it.
+      let targetDeck = "";
       let firstJobId: string | null = null;
       for (const file of files) {
         let jobId = created.current.get(file.uri);
@@ -118,8 +108,6 @@ export default function NewJob() {
     }
   };
 
-  const chosen = decks.find((d) => d.deck_id === deckId);
-
   const fieldRow = {
     flexDirection: "row" as const,
     alignItems: "center" as const,
@@ -136,7 +124,7 @@ export default function NewJob() {
     <View style={{ flex: 1, backgroundColor: palette.bg, paddingTop: insets.top }}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: space[2] }}>
         <IconBtn name="chevL" label="Back" onPress={() => goBack()} />
-        <Cap style={{ flex: 1, textAlign: "center" }}>Add a lecture</Cap>
+        <Cap style={{ flex: 1, textAlign: "center" }}>New deck</Cap>
         <View style={{ width: target.min }} />
       </View>
 
@@ -146,38 +134,18 @@ export default function NewJob() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={{ gap: space[1] }}>
-          <Cap style={{ paddingLeft: 2 }}>Into</Cap>
-          <Pressable
-            onPress={() => setChoosing(true)}
-            style={({ pressed }) => [fieldRow, { backgroundColor: pressed ? palette.sunken : palette.surface }]}
-          >
-            <T v="body" numberOfLines={1} style={{ flex: 1, fontWeight: "600" }}>
-              {deckId ? (chosen ? `${chosen.name} (${chosen.card_count} cards)` : "…") : "A new deck"}
-            </T>
-            <Icon name="chevD" size={16} color={palette.muted} />
-          </Pressable>
-          {deckId !== "" && (
+          <TextInput
+            value={deckName}
+            onChangeText={setDeckName}
+            placeholder="Name this deck (required)"
+            placeholderTextColor={palette.muted}
+            style={[fieldRow, { color: palette.text, fontSize: 16, fontWeight: "600", paddingVertical: 12 }]}
+          />
+          {!deckName.trim() && (
             <Cap>
-              Cards that improve on ones already here update them in place
-              rather than arriving alongside them.
+              A short name beats the filename — “Antibiotics”, not the
+              whole PowerPoint title.
             </Cap>
-          )}
-          {deckId === "" && (
-            <>
-              <TextInput
-                value={deckName}
-                onChangeText={setDeckName}
-                placeholder="Name this deck (required)"
-                placeholderTextColor={palette.muted}
-                style={[fieldRow, { color: palette.text, fontSize: 16, fontWeight: "600", paddingVertical: 12 }]}
-              />
-              {!deckName.trim() && (
-                <Cap>
-                  A short name beats the filename — “Antibiotics”, not the
-                  whole PowerPoint title.
-                </Cap>
-              )}
-            </>
           )}
         </View>
 
@@ -238,45 +206,10 @@ export default function NewJob() {
 
         {error && <ErrorCard message={error} onRetry={send} />}
         <Button title={busy ? "Uploading…" : "Upload & plan"} onPress={send}
-          disabled={!files.length || busy || (deckId === "" && !deckName.trim())} />
+          disabled={!files.length || busy || !deckName.trim()} />
       </ScrollView>
 
-      {choosing && (
-        <Sheet onClose={() => setChoosing(false)}>
-          <T v="heading">Into</T>
-          <ScrollView style={{ maxHeight: 400 }}>
-            <DeckRow label="A new deck" selected={deckId === ""}
-              onPress={() => { setDeckId(""); setChoosing(false); }} />
-            {decks.map((d) => (
-              <DeckRow key={d.deck_id} label={d.name} caption={`${d.card_count} cards`}
-                selected={d.deck_id === deckId}
-                onPress={() => { setDeckId(d.deck_id); setChoosing(false); }} />
-            ))}
-          </ScrollView>
-        </Sheet>
-      )}
     </View>
   );
 }
 
-function DeckRow({ label, caption, selected, onPress }: {
-  label: string; caption?: string; selected: boolean; onPress: () => void;
-}) {
-  const palette = usePalette();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => ({
-        flexDirection: "row" as const, alignItems: "center" as const, gap: space[3],
-        minHeight: target.min, paddingHorizontal: space[1], borderRadius: radius.sm,
-        backgroundColor: pressed ? palette.sunken : "transparent",
-      })}
-    >
-      <View style={{ flex: 1 }}>
-        <T v="body" numberOfLines={1} style={{ fontWeight: selected ? "600" : "400" }}>{label}</T>
-        {caption ? <Cap>{caption}</Cap> : null}
-      </View>
-      {selected && <Icon name="check" size={18} color={palette.accent} />}
-    </Pressable>
-  );
-}

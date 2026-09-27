@@ -80,7 +80,7 @@ export default function JobRun() {
 
   if (planError)
     return (
-      <Frame title={job.source_filename || "Upload"}>
+      <Frame title={job.deck_name || job.source_filename || "Upload"}>
         <ErrorCard message={planError} onRetry={() => { setPlanError(null); refresh(); }} />
       </Frame>
     );
@@ -89,7 +89,7 @@ export default function JobRun() {
 
   if (["uploaded", "planning"].includes(job.state))
     return (
-      <Frame title={job.source_filename || "Planning"} notice={notice}>
+      <Frame title={job.deck_name || job.source_filename || "Planning"} notice={notice}>
         <CardBox style={{ padding: space[4], gap: space[1] }}>
           <T v="heading">Reading your material</T>
           <T v="secondary">
@@ -111,7 +111,7 @@ export default function JobRun() {
 
   if (job.state === "interrupted")
     return (
-      <Frame title={job.source_filename || "Interrupted"} notice={notice}>
+      <Frame title={job.deck_name || job.source_filename || "Interrupted"} notice={notice}>
         <CardBox style={{ padding: space[4], gap: space[2] }}>
           <T v="heading">Interrupted</T>
           <T v="secondary">
@@ -128,7 +128,7 @@ export default function JobRun() {
 
   if (job.state === "failed")
     return (
-      <Frame title={job.source_filename || "Failed"} notice={notice}>
+      <Frame title={job.deck_name || job.source_filename || "Failed"} notice={notice}>
         <ErrorCard
           message={job.error || "This upload failed."}
           onRetry={() =>
@@ -144,7 +144,7 @@ export default function JobRun() {
 
   if (job.state === "dead")
     return (
-      <Frame title={job.source_filename || "Stopped"} notice={notice}>
+      <Frame title={job.deck_name || job.source_filename || "Stopped"} notice={notice}>
         <CardBox style={{ padding: space[4], gap: space[2] }}>
           <T v="heading">Stopped</T>
           <T v="secondary">
@@ -289,7 +289,7 @@ function PlanReview({ job, onApproved, notice }: {
   return (
     <Frame
       title="Plan review"
-      caption={job.source_filename}
+      caption={job.deck_name || job.source_filename}
       notice={notice}
       footer={
         <View style={{
