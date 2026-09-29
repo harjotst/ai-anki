@@ -1,13 +1,17 @@
 # ai-anki
 
-Turn study documents into Anki decks whose structure and difficulty scale with the
-material — then keep them up to date as the course goes on, without duplicating a
-single card you have already been reviewing.
+[![CI](https://github.com/harjotst/ai-anki/actions/workflows/ci.yml/badge.svg)](https://github.com/harjotst/ai-anki/actions/workflows/ci.yml)
 
-Upload a lecture PDF, a chapter, a slide deck or a spreadsheet. The application reads
-it, proposes a deck plan you can edit before anything expensive runs, **teaches you each
-topic**, generates the cards that reinforce it, and shows you exactly what downloading
-would change in your collection.
+**An iPhone app that turns a lecture into lessons and flashcards, and keeps them up to
+date when the lecture changes.** The app is Expo / React Native on TestFlight; the
+backend is FastAPI on Fly.io, with Postgres and sign-in on Supabase and generation on
+OpenAI.
+
+Upload a lecture PDF, a chapter, a slide deck or a spreadsheet from your phone. The
+application reads it, proposes a deck plan you can edit before anything expensive runs,
+**teaches you each topic**, writes the cards that reinforce it, and schedules your
+reviews with FSRS. Decks also export to Anki, and a later export updates the cards you
+already have instead of duplicating them.
 
 ---
 
@@ -60,20 +64,48 @@ change. Monotonicity is enforced in code rather than trusted to the wall clock.
 **`pg_dump` refuses to dump a server newer than itself,** and Debian ships client 15.
 Found by building the image and running a restore, not by reading about it.
 
+The two caching findings were measured on Anthropic's API, which the project used until
+September 2026. The call ordering carries over to OpenAI's prompt caching; the numbers
+have not been re-measured there.
+
 ---
+
+## How the pieces fit
+
+```mermaid
+flowchart LR
+    phone["iPhone app<br/>Expo · React Native · TypeScript"]
+    auth["Supabase Auth<br/>Google · Apple"]
+    api["FastAPI on Fly.io<br/>in-process worker · LibreOffice"]
+    db[("Supabase Postgres")]
+    llm["OpenAI Responses API"]
+
+    phone -- "sign in" --> auth
+    phone -- "HTTPS + JWT<br/>(polls job progress)" --> api
+    api -- "verifies JWT against JWKS" --> auth
+    api --> db
+    api -- "plan · lessons · cards" --> llm
+```
+
+The phone never talks to the database or the model. Every request carries a Supabase
+JWT, which the API verifies against the published key set; every route that names a
+job, deck or card checks that it belongs to the caller, and a test walks the router so
+a route added later cannot skip that check.
 
 ## How it is built
 
 | | |
 |---|---|
 | **Backend** | FastAPI, Postgres (psycopg 3), Alembic |
-| **Auth** | Supabase — Google, Apple, email |
-| **App** | Expo (React Native) — iOS and Android, in `mobile/` |
+| **Auth** | Supabase — Google and Apple sign-in, JWTs verified against JWKS |
+| **App** | Expo (React Native, TypeScript) — iOS, in `mobile/`, shipped to TestFlight with EAS Build |
+| **Study** | FSRS scheduling, rebuilt by replaying an append-only review log |
 | **Generation** | OpenAI Responses API (`gpt-5.6-luna`), three passes, prompt caching, strict structured outputs |
 | **Packaging** | genanki, with the official `anki` package as a *test-only* dependency |
-| **Deployment** | Fly.io, one machine, LibreOffice for conversion |
+| **Deployment** | Fly.io (one machine, LibreOffice for conversion), migrations as a release command |
+| **CI** | GitHub Actions: the test suite, the production image, the app's typecheck |
 
-**Nearly 300 tests, and only two seams.** The OpenAI API is faked at the HTTP transport
+**310 tests, and only two seams.** The OpenAI API is faked at the HTTP transport
 only, so the real SDK stays in the loop and SDK misuse still fails a test. The database
 is a real Postgres in a container, because a fake would accept queries the real server
 rejects. Everything else drives the application through its own HTTP boundary — which
@@ -119,14 +151,21 @@ monthly cap as the backstop that survives a bug in this application.
 
 ## Status
 
-The generation pipeline, the deck lineage, the Anki export and the lesson pass are
-finished and in use. Accounts and Postgres are done; the Supabase project itself is not
-yet provisioned.
+The backend is live on Fly.io against Supabase, and the iPhone app is in internal
+TestFlight testing. Generation, lessons, in-app study with FSRS, per-topic mastery
+(mean FSRS retrievability) and Anki import and export all work end to end; the first
+run against the deployed server, and what it found, is in
+[`docs/e2e-2026-09-26.md`](docs/e2e-2026-09-26.md).
 
-`docs/superpowers/specs/` has the design for what comes next: studying inside the
-application rather than exporting to Anki, a tutor summoned when your review history
-shows a topic decaying, and mastery defined as mean FSRS retrievability rather than as
-a marketing word.
+Not built: an Android release, and a tutor summoned when your review history shows a
+topic decaying.
+
+## How it was built
+
+Most of the code was written with Claude Code as the implementation tool, which the
+commit trailers record. The product and design decisions, the verification against
+real systems (the deployed server, a real Postgres, Anki's own import engine) and the
+deploys are mine.
 
 ## Documentation
 
@@ -136,3 +175,8 @@ a marketing word.
   sources, including the ones that turned out to be wrong
 - [`docs/providers.md`](docs/providers.md) — the model, its capability gate and its
   rates
+- [`docs/e2e-2026-09-26.md`](docs/e2e-2026-09-26.md) — the first end-to-end run on the
+  deployed app, and the fixes it led to
+- [`mobile/`](mobile/) — the iPhone app, and how to build and ship it
+- [`docs/history/`](docs/history/) — planning documents from earlier shapes of the
+  project

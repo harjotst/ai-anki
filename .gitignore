@@ -7,17 +7,17 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
-# Node / frontend build
+# Node
 node_modules/
-frontend/dist/
-.vite/
+# The deleted web app, in checkouts that still have it on disk
+frontend/
 
-# Secrets — never commit the Anthropic key or the shared access password
+# Secrets — API keys and database URLs live in .env, never in the repository
 .env
 .env.*
 !.env.example
 
-# Runtime data: SQLite DB, uploaded documents, generated .apkg files.
+# Runtime data: uploaded documents and generated .apkg files.
 # `.local/` is the local dev volume — it holds real uploaded material, which is
 # other people's copyrighted course notes and must never reach a repository.
 .local/
