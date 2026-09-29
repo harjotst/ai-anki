@@ -16,7 +16,10 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.harjotst.aianki"
     },
-    "platforms": ["ios", "android"],
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "plugins": [
       "expo-router",
       [
@@ -44,6 +47,13 @@
       "config": {
         "usesNonExemptEncryption": false
       }
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "30c79722-d3b1-4317-be80-e5d4c00d2945"
+      }
+    },
+    "owner": "harjotst"
   }
 }
