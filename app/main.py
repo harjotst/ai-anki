@@ -318,9 +318,8 @@ def create_app(
         return FileResponse(path, media_type=media_type, filename=name)
 
     @app.get("/api/jobs/{job_id}/topics")
-    def read_topics(job_id: str, conn=Depends(get_conn)):
-        if jobs.load_job(conn, job_id) is None:
-            raise HTTPException(status_code=404, detail="job not found")
+    def read_topics(job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
+        owned_job(conn, job_id, account.id)
         return {
             "topics": [
                 {
@@ -336,15 +335,19 @@ def create_app(
         }
 
     @app.get("/api/jobs/{job_id}/events")
-    def watch_job(job_id: str, request: Request, conn=Depends(get_conn)):
+    def watch_job(
+        job_id: str,
+        request: Request,
+        conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
+    ):
         """Progress for one job, as a stream a browser can be dropped from.
 
         What is streamed is the job's persisted event log and nothing else, so
         this says the same thing whether the worker is in this process, in a
         process that has since been killed, or was never running at all.
         """
-        if jobs.load_job(conn, job_id) is None:
-            raise HTTPException(status_code=404, detail="job not found")
+        owned_job(conn, job_id, account.id)
         return StreamingResponse(
             progress.stream(
                 database_url,
@@ -359,10 +362,8 @@ def create_app(
         )
 
     @app.post("/api/jobs/{job_id}/plan")
-    def plan_job(job_id: str, conn=Depends(get_conn)):
-        job = jobs.load_job(conn, job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
+    def plan_job(job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
+        job = owned_job(conn, job_id, account.id)
         guard_spend(conn, job.account_id)
         _claim(conn, job_id, jobs.PLANNING)
 
@@ -649,14 +650,12 @@ def create_app(
         }
 
     @app.post("/api/jobs/{job_id}/generate")
-    async def generate_cards(job_id: str, conn=Depends(get_conn)):
+    async def generate_cards(job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
         # Async only for the generation run itself. The admission checks read
         # the database and count tokens over the network, so they go to a
         # thread like every other handler's blocking work.
         def admit() -> None:
-            job = jobs.load_job(conn, job_id)
-            if job is None:
-                raise HTTPException(status_code=404, detail="job not found")
+            job = owned_job(conn, job_id, account.id)
             if job.plan is None:
                 raise HTTPException(status_code=409, detail="job has no approved plan yet")
             guard_spend(conn, job.account_id)
@@ -685,10 +684,9 @@ def create_app(
         }
 
     @app.post("/api/jobs/{job_id}/clear")
-    def clear_job(job_id: str, conn=Depends(get_conn)):
+    def clear_job(job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
         """The manual intervention a dead job requires before it runs again."""
-        if jobs.load_job(conn, job_id) is None:
-            raise HTTPException(status_code=404, detail="job not found")
+        owned_job(conn, job_id, account.id)
         try:
             jobs.clear_dead_job(conn, job_id)
         except jobs.IllegalTransition as exc:
@@ -885,9 +883,8 @@ def create_app(
         return lesson
 
     @app.get("/api/jobs/{job_id}/cards")
-    def read_cards(job_id: str, conn=Depends(get_conn)):
-        if jobs.load_job(conn, job_id) is None:
-            raise HTTPException(status_code=404, detail="job not found")
+    def read_cards(job_id: str, conn=Depends(get_conn), account: identity.Account = Depends(account_of)):
+        owned_job(conn, job_id, account.id)
         cards = jobs.load_cards(conn, job_id)
         return {
             "cards": [
@@ -958,10 +955,9 @@ def create_app(
         update: bool = False,
         skip: list[str] = Query(default=[]),
         conn=Depends(get_conn),
+        account: identity.Account = Depends(account_of),
     ):
-        job = jobs.load_job(conn, job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
+        job = owned_job(conn, job_id, account.id)
         cards = jobs.load_cards(conn, job_id)
         if not cards:
             raise HTTPException(status_code=409, detail="job has no cards to package")

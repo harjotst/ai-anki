@@ -153,6 +153,45 @@ def test_one_persons_job_is_not_visible_to_another_person(boot):
         assert machine.post(f"/api/jobs/{mine}/cards/reject", json={"card_uuids": []}).status_code == 404
 
 
+def test_no_route_that_names_somebody_elses_thing_answers_a_stranger(boot, llm):
+    """Every route, not a list of them. Seven job routes once checked only that
+    the job existed, so a stranger holding an id could read an owner's cards,
+    download their deck, or start paid generation charged to the owner. A list
+    is how that happened: a route added later is a route the list forgot. So
+    this walks the router, and a new route that takes an id is covered the
+    moment it exists."""
+    from tests.test_study import studied_deck
+
+    with boot() as machine:
+        deck_id, job_id = studied_deck(machine, llm)
+        ids = {
+            "job_id": job_id,
+            "deck_id": deck_id,
+            "card_uuid": machine.get(f"/api/decks/{deck_id}/cards").json()["cards"][0]["card_uuid"],
+            "topic_id": machine.get(f"/api/jobs/{job_id}/topics").json()["topics"][0]["topic_id"],
+        }
+        owners_cards = machine.get(f"/api/jobs/{job_id}/cards").json()
+
+        machine.sign_in_as(SOMEBODY_ELSE)
+        tried = []
+        for route in machine.app.routes:
+            names = getattr(route, "param_convertors", {})
+            if not route.path.startswith("/api/") or not names:
+                continue
+            assert set(names) <= set(ids), f"{route.path} takes an id this test cannot fill"
+            path = route.path.format(**ids)
+            for method in route.methods - {"HEAD"}:
+                answer = machine.request(method, path, json={} if method != "GET" else None)
+                assert answer.status_code == 404, f"{method} {route.path}: {answer.status_code} {answer.text[:200]}"
+                tried.append(f"{method} {route.path}")
+
+        assert len(tried) >= 30, tried
+
+        # And none of the refusals touched anything.
+        machine.sign_in_as(TESTER)
+        assert machine.get(f"/api/jobs/{job_id}/cards").json() == owners_cards
+
+
 # --- one person, however they signed in ----------------------------------
 
 
