@@ -289,3 +289,41 @@ The volume holds the database, the uploads and `TMPDIR`. Uploads dominate and
 are purged on a schedule; 3GB is comfortable for a term's material for a handful
 of people. One LibreOffice conversion peaks around 218MB, measured, which is why
 the machine is 1GB rather than 256MB.
+
+## Shipping the iOS app to TestFlight
+
+EAS builds the app in the cloud and submits it to App Store Connect; no Mac is
+needed. `mobile/eas.json` has one profile, `production`, pointed at the deployed
+API. Build numbers are kept by EAS and go up by one on every build.
+
+Once, before the first build:
+
+- An Apple Developer Program membership, and an Expo account (`npx eas-cli login`).
+- In `mobile/`, `npx eas-cli init` links the project to Expo and writes its
+  `projectId` into `app.json`. Commit that.
+- On expo.dev → the project → Environment variables, for **production**:
+  `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY`. They are the same
+  values as the local `.env`. A production build refuses to start without them
+  (`mobile/app.config.js`), because without them nobody could sign in.
+- Supabase → Authentication → URL Configuration: add `aianki://auth-callback` to the
+  redirect allow list. A real build returns from Google sign-in on the app scheme
+  instead of Expo Go's `exp://` address.
+- Supabase → Authentication → Providers → Apple: add `com.harjotst.aianki` to the
+  client IDs. The native Apple sheet issues tokens for the bundle identifier.
+
+Then, from `mobile/`:
+
+```bash
+npx eas-cli build --platform ios --profile production --auto-submit
+```
+
+The first run is interactive. It signs in to Apple, creates the distribution
+certificate, the provisioning profile and the App Store Connect app record, and
+stores an App Store Connect API key for later submissions. Every run after that
+uses the same command. The build appears in TestFlight once Apple has processed
+it, which usually takes 10 to 30 minutes. Internal testers (up to 100 App Store
+Connect users) can install it straight away. External testers can install it
+only after Beta App Review.
+
+`ITSAppUsesNonExemptEncryption` is false because the app uses HTTPS and nothing
+else. That answers the export-compliance question, so builds do not wait on it.
